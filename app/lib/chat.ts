@@ -59,6 +59,13 @@ export type ChatMessage = {
 
 export type ChatStreamEvent =
   | { activity: ChatActivity; type: 'activity' }
+  | {
+      responseId: string
+      resumeToken: string
+      sequenceNumber: number
+      type: 'background'
+    }
+  | { sequenceNumber: number; type: 'cursor' }
   | { delta: string; type: 'text-delta' }
   | {
       content: string
@@ -66,5 +73,7 @@ export type ChatStreamEvent =
       sources: ChatSource[]
       type: 'message'
     }
+  | { type: 'cancelled' }
   | { message: string; type: 'error' }
+  | { type: 'reconnect' }
   | { type: 'done' }

@@ -14,6 +14,13 @@ import {
   failActiveChatActivities,
   upsertChatActivity,
 } from '../lib/chat-activities'
+import {
+  clearActiveBackgroundChat,
+  readActiveBackgroundChat,
+  snapshotBackgroundMessages,
+  writeActiveBackgroundChat,
+  type ActiveBackgroundChat,
+} from '../lib/chat-background'
 import type {
   ChatActivity,
   ChatMessage as ChatMessageValue,
@@ -24,6 +31,38 @@ import { ChatMessages } from './chat-messages'
 import { ChatScrollToBottom } from './chat-scroll-to-bottom'
 import { ChatTurnScrollSync } from './chat-turn-scroll-sync'
 import { PromptInput, type PromptSubmission } from './prompt-input'
+
+const BACKGROUND_CHECKPOINT_DELAY_MS = 250
+const BACKGROUND_RECONNECT_MAX_DELAY_MS = 10_000
+
+type BackgroundConnection = Omit<
+  ActiveBackgroundChat,
+  'messages' | 'version'
+>
+
+class ChatRequestError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ChatRequestError'
+    this.status = status
+  }
+}
+
+class ChatCancelledError extends Error {
+  constructor() {
+    super('The response was cancelled.')
+    this.name = 'ChatCancelledError'
+  }
+}
+
+class BackgroundReconnectError extends Error {
+  constructor() {
+    super('The background response stream needs to reconnect.')
+    this.name = 'BackgroundReconnectError'
+  }
+}
 
 function streamEvent(value: unknown): ChatStreamEvent | null {
   if (!value || typeof value !== 'object' || !('type' in value)) return null
@@ -45,6 +84,30 @@ function streamEvent(value: unknown): ChatStreamEvent | null {
       }
     }
   }
+  if (
+    event.type === 'background' &&
+    typeof event.responseId === 'string' &&
+    typeof event.resumeToken === 'string' &&
+    Number.isSafeInteger(event.sequenceNumber) &&
+    Number(event.sequenceNumber) >= 0
+  ) {
+    return {
+      responseId: event.responseId,
+      resumeToken: event.resumeToken,
+      sequenceNumber: Number(event.sequenceNumber),
+      type: 'background',
+    }
+  }
+  if (
+    event.type === 'cursor' &&
+    Number.isSafeInteger(event.sequenceNumber) &&
+    Number(event.sequenceNumber) >= 0
+  ) {
+    return {
+      sequenceNumber: Number(event.sequenceNumber),
+      type: 'cursor',
+    }
+  }
   if (event.type === 'text-delta' && typeof event.delta === 'string') {
     return { delta: event.delta, type: 'text-delta' }
   }
@@ -59,18 +122,55 @@ function streamEvent(value: unknown): ChatStreamEvent | null {
   if (event.type === 'error' && typeof event.message === 'string') {
     return { message: event.message, type: 'error' }
   }
+  if (event.type === 'cancelled') return { type: 'cancelled' }
+  if (event.type === 'reconnect') return { type: 'reconnect' }
   if (event.type === 'done') return { type: 'done' }
   return null
 }
 
 async function responseError(response: Response) {
+  let message = 'Khloei could not start that response.'
   try {
     const body = (await response.json()) as { error?: unknown }
-    if (typeof body.error === 'string') return body.error
+    if (typeof body.error === 'string') message = body.error
   } catch {
     // The fallback below covers non-JSON server responses.
   }
-  return 'Khloei could not start that response.'
+  return new ChatRequestError(message, response.status)
+}
+
+function isRetriableBackgroundError(error: unknown) {
+  if (error instanceof BackgroundReconnectError) return true
+  if (error instanceof ChatRequestError) {
+    return error.status === 408 || error.status === 429 || error.status >= 500
+  }
+  return error instanceof TypeError
+}
+
+function reconnectDelay(attempt: number) {
+  return Math.min(
+    500 * 2 ** Math.min(attempt, 5),
+    BACKGROUND_RECONNECT_MAX_DELAY_MS,
+  )
+}
+
+function waitForReconnect(delay: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      signal.removeEventListener('abort', abort)
+      resolve()
+    }, delay)
+    const abort = () => {
+      window.clearTimeout(timer)
+      reject(signal.reason ?? new DOMException('Aborted', 'AbortError'))
+    }
+    signal.addEventListener('abort', abort, { once: true })
+  })
 }
 
 function normalizePrompt(value: string) {
@@ -88,7 +188,12 @@ function imageUrlsInMessages(messages: readonly ChatMessageValue[]) {
 export function ChatShell() {
   const [messages, setMessages] = useState<ChatMessageValue[]>([])
   const [streaming, setStreaming] = useState(false)
+  const activeBackgroundRef = useRef<BackgroundConnection | null>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const backgroundCheckpointMessagesRef = useRef<
+    ChatMessageValue[] | null
+  >(null)
+  const backgroundCheckpointTimerRef = useRef<number | null>(null)
   const messageImageUrlsRef = useRef(new Set<string>())
   const messagesRef = useRef<ChatMessageValue[]>([])
   const previousResponseIdRef = useRef<string | null>(null)
@@ -102,153 +207,318 @@ export function ChatShell() {
     promptInputRef,
   )
 
+  const commitMessages = useCallback(
+    (update: (current: ChatMessageValue[]) => ChatMessageValue[]) => {
+      const next = update(messagesRef.current)
+      messagesRef.current = next
+      setMessages(next)
+      return next
+    },
+    [],
+  )
+
+  const flushBackgroundCheckpoint = useCallback(() => {
+    if (backgroundCheckpointTimerRef.current !== null) {
+      window.clearTimeout(backgroundCheckpointTimerRef.current)
+      backgroundCheckpointTimerRef.current = null
+    }
+
+    const active = activeBackgroundRef.current
+    const checkpointMessages = backgroundCheckpointMessagesRef.current
+    if (!active || !checkpointMessages) return
+
+    writeActiveBackgroundChat({
+      ...active,
+      messages: snapshotBackgroundMessages(checkpointMessages),
+      version: 1,
+    })
+  }, [])
+
+  const scheduleBackgroundCheckpoint = useCallback(() => {
+    if (backgroundCheckpointTimerRef.current !== null) return
+    backgroundCheckpointTimerRef.current = window.setTimeout(
+      flushBackgroundCheckpoint,
+      BACKGROUND_CHECKPOINT_DELAY_MS,
+    )
+  }, [flushBackgroundCheckpoint])
+
+  const clearBackgroundState = useCallback(() => {
+    if (backgroundCheckpointTimerRef.current !== null) {
+      window.clearTimeout(backgroundCheckpointTimerRef.current)
+      backgroundCheckpointTimerRef.current = null
+    }
+    activeBackgroundRef.current = null
+    backgroundCheckpointMessagesRef.current = null
+    clearActiveBackgroundChat()
+  }, [])
+
+  const cancelBackgroundResponse = useCallback(
+    (active: BackgroundConnection) => {
+      void fetch('/api/chat/background', {
+        body: JSON.stringify({
+          responseId: active.responseId,
+          resumeToken: active.resumeToken,
+          startingAfter: active.sequenceNumber,
+        }),
+        headers: { 'Content-Type': 'application/json' },
+        keepalive: true,
+        method: 'DELETE',
+      }).catch(() => {
+        // The local response stops immediately even if the cancellation request
+        // loses its network connection.
+      })
+    },
+    [],
+  )
+
   useEffect(() => {
     messagesRef.current = messages
   }, [messages])
 
   useEffect(
     () => () => {
-      abortRef.current?.abort()
+      flushBackgroundCheckpoint()
+      const controller = abortRef.current
+      abortRef.current = null
+      controller?.abort()
       for (const url of messageImageUrlsRef.current) URL.revokeObjectURL(url)
       messageImageUrlsRef.current.clear()
     },
-    [],
+    [flushBackgroundCheckpoint],
   )
 
   const stopResponse = useCallback(() => {
+    const active = activeBackgroundRef.current
+    if (active) cancelBackgroundResponse(active)
+    clearBackgroundState()
     abortRef.current?.abort()
-  }, [])
+  }, [cancelBackgroundResponse, clearBackgroundState])
 
   const startNewChat = useCallback(() => {
-    abortRef.current?.abort()
+    const active = activeBackgroundRef.current
+    if (active) cancelBackgroundResponse(active)
+    clearBackgroundState()
+    const controller = abortRef.current
     abortRef.current = null
+    controller?.abort()
     previousResponseIdRef.current = null
     submissionsRef.current.clear()
     for (const url of messageImageUrlsRef.current) URL.revokeObjectURL(url)
     messageImageUrlsRef.current.clear()
-    setMessages([])
+    commitMessages(() => [])
     setStreaming(false)
-  }, [])
+  }, [cancelBackgroundResponse, clearBackgroundState, commitMessages])
 
   const requestAssistant = useCallback(
     ({
       assistantId,
+      background,
       previousResponseId,
       submission,
     }: {
       assistantId: string
+      background?: ActiveBackgroundChat
       previousResponseId?: string
-      submission: PromptSubmission
+      submission?: PromptSubmission
     }) => {
       const controller = new AbortController()
+
+      if (background) {
+        activeBackgroundRef.current = {
+          assistantId: background.assistantId,
+          createdAt: background.createdAt,
+          responseId: background.responseId,
+          resumeToken: background.resumeToken,
+          sequenceNumber: background.sequenceNumber,
+        }
+        backgroundCheckpointMessagesRef.current = messagesRef.current
+      }
 
       abortRef.current = controller
       setStreaming(true)
 
       void (async () => {
-        let completed = false
+        let reconnectAttempt = 0
         try {
-          const formData = new FormData()
-          formData.append('message', submission.text)
-          if (previousResponseId) {
-            formData.append('previousResponseId', previousResponseId)
-          }
-          for (const attachment of submission.attachments) {
-            formData.append('attachments', attachment.file, attachment.file.name)
-          }
-
-          const response = await fetch('/api/chat', {
-            body: formData,
-            method: 'POST',
-            signal: controller.signal,
-          })
-          if (!response.ok) throw new Error(await responseError(response))
-          if (!response.body) {
-            throw new Error('The response stream was unavailable.')
-          }
-
-          const reader = response.body.getReader()
-          const decoder = new TextDecoder()
-          let buffer = ''
-
-          const applyLine = (line: string) => {
-            if (abortRef.current !== controller || !line.trim()) return
-            let parsed: unknown
+          while (!controller.signal.aborted) {
+            let completed = false
+            let response: Response
             try {
-              parsed = JSON.parse(line)
-            } catch {
+              const active = activeBackgroundRef.current
+              if (active?.assistantId === assistantId) {
+                response = await fetch('/api/chat/background', {
+                  body: JSON.stringify({
+                    responseId: active.responseId,
+                    resumeToken: active.resumeToken,
+                    startingAfter: active.sequenceNumber,
+                  }),
+                  headers: { 'Content-Type': 'application/json' },
+                  method: 'POST',
+                  signal: controller.signal,
+                })
+              } else {
+                if (!submission) {
+                  throw new Error('The background response could not be restored.')
+                }
+                const formData = new FormData()
+                formData.append('message', submission.text)
+                if (previousResponseId) {
+                  formData.append('previousResponseId', previousResponseId)
+                }
+                for (const attachment of submission.attachments) {
+                  formData.append(
+                    'attachments',
+                    attachment.file,
+                    attachment.file.name,
+                  )
+                }
+                response = await fetch('/api/chat', {
+                  body: formData,
+                  method: 'POST',
+                  signal: controller.signal,
+                })
+              }
+
+              if (!response.ok) throw await responseError(response)
+              if (!response.body) throw new BackgroundReconnectError()
+
+              const reader = response.body.getReader()
+              const decoder = new TextDecoder()
+              let buffer = ''
+
+              const applyLine = (line: string) => {
+                if (abortRef.current !== controller || !line.trim()) return
+                let parsed: unknown
+                try {
+                  parsed = JSON.parse(line)
+                } catch {
+                  return
+                }
+                const event = streamEvent(parsed)
+                if (!event) return
+
+                if (event.type === 'activity') {
+                  commitMessages((current) =>
+                    current.map((message) =>
+                      message.id === assistantId
+                        ? {
+                            ...message,
+                            activities: upsertChatActivity(
+                              message.activities,
+                              event.activity,
+                            ),
+                          }
+                        : message,
+                    ),
+                  )
+                } else if (event.type === 'background') {
+                  const active: BackgroundConnection = {
+                    assistantId,
+                    createdAt: Date.now(),
+                    responseId: event.responseId,
+                    resumeToken: event.resumeToken,
+                    sequenceNumber: event.sequenceNumber,
+                  }
+                  activeBackgroundRef.current = active
+                  backgroundCheckpointMessagesRef.current = messagesRef.current
+                  flushBackgroundCheckpoint()
+                } else if (event.type === 'cursor') {
+                  const active = activeBackgroundRef.current
+                  if (
+                    active?.assistantId === assistantId &&
+                    event.sequenceNumber >= active.sequenceNumber
+                  ) {
+                    activeBackgroundRef.current = {
+                      ...active,
+                      sequenceNumber: event.sequenceNumber,
+                    }
+                    backgroundCheckpointMessagesRef.current = messagesRef.current
+                    scheduleBackgroundCheckpoint()
+                  }
+                } else if (event.type === 'text-delta') {
+                  commitMessages((current) =>
+                    current.map((message) =>
+                      message.id === assistantId
+                        ? { ...message, content: message.content + event.delta }
+                        : message,
+                    ),
+                  )
+                } else if (event.type === 'message') {
+                  previousResponseIdRef.current = event.responseId
+                  commitMessages((current) =>
+                    current.map((message) =>
+                      message.id === assistantId
+                        ? {
+                            ...message,
+                            content: event.content || message.content,
+                            responseId: event.responseId,
+                            sources: event.sources,
+                          }
+                        : message,
+                    ),
+                  )
+                } else if (event.type === 'error') {
+                  throw new Error(event.message)
+                } else if (event.type === 'cancelled') {
+                  throw new ChatCancelledError()
+                } else if (event.type === 'reconnect') {
+                  throw new BackgroundReconnectError()
+                } else if (event.type === 'done') {
+                  completed = true
+                }
+              }
+
+              while (true) {
+                const { done, value } = await reader.read()
+                if (done) break
+                buffer += decoder.decode(value, { stream: true })
+                const lines = buffer.split('\n')
+                buffer = lines.pop() ?? ''
+                for (const line of lines) applyLine(line)
+              }
+              buffer += decoder.decode()
+              if (buffer) applyLine(buffer)
+
+              if (!completed) throw new BackgroundReconnectError()
+            } catch (error) {
+              if (controller.signal.aborted) throw error
+
+              const active = activeBackgroundRef.current
+              if (
+                active?.assistantId !== assistantId ||
+                !isRetriableBackgroundError(error)
+              ) {
+                throw error
+              }
+
+              flushBackgroundCheckpoint()
+              const checkpoint = backgroundCheckpointMessagesRef.current
+              if (checkpoint) commitMessages(() => checkpoint)
+              await waitForReconnect(
+                reconnectDelay(reconnectAttempt),
+                controller.signal,
+              )
+              reconnectAttempt += 1
+              continue
+            }
+
+            if (completed) {
+              clearBackgroundState()
+              commitMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantId
+                    ? { ...message, status: 'complete' }
+                    : message,
+                ),
+              )
               return
             }
-            const event = streamEvent(parsed)
-            if (!event) return
-
-            if (event.type === 'activity') {
-              setMessages((current) =>
-                current.map((message) =>
-                  message.id === assistantId
-                    ? {
-                        ...message,
-                        activities: upsertChatActivity(
-                          message.activities,
-                          event.activity,
-                        ),
-                      }
-                    : message,
-                ),
-              )
-            } else if (event.type === 'text-delta') {
-              setMessages((current) =>
-                current.map((message) =>
-                  message.id === assistantId
-                    ? { ...message, content: message.content + event.delta }
-                    : message,
-                ),
-              )
-            } else if (event.type === 'message') {
-              previousResponseIdRef.current = event.responseId
-              setMessages((current) =>
-                current.map((message) =>
-                  message.id === assistantId
-                    ? {
-                        ...message,
-                        content: event.content || message.content,
-                        responseId: event.responseId,
-                        sources: event.sources,
-                      }
-                    : message,
-                ),
-              )
-            } else if (event.type === 'error') {
-              throw new Error(event.message)
-            } else if (event.type === 'done') {
-              completed = true
-            }
           }
-
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() ?? ''
-            for (const line of lines) applyLine(line)
-          }
-          buffer += decoder.decode()
-          if (buffer) applyLine(buffer)
-
-          if (!completed) {
-            throw new Error('The response stream ended unexpectedly.')
-          }
-          setMessages((current) =>
-            current.map((message) =>
-              message.id === assistantId
-                ? { ...message, status: 'complete' }
-                : message,
-            ),
-          )
         } catch (error) {
+          if (abortRef.current !== controller) return
+          clearBackgroundState()
           if (controller.signal.aborted) {
-            setMessages((current) =>
+            commitMessages((current) =>
               current.flatMap((message) => {
                 if (message.id !== assistantId) return [message]
                 return message.content || message.activities?.length
@@ -265,26 +535,45 @@ export function ChatShell() {
               }),
             )
           } else {
-            const messageText =
-              error instanceof Error
-                ? error.message
-                : 'Khloei could not complete that response.'
-            setMessages((current) =>
-              current.map((message) =>
-                message.id === assistantId
-                  ? {
-                      ...message,
-                      activities: failActiveChatActivities(
-                        message.activities,
-                      ),
-                      content: message.content
-                        ? `${message.content}\n\n> ${messageText}`
-                        : messageText,
-                      status: 'error',
-                    }
-                  : message,
-              ),
-            )
+            if (error instanceof ChatCancelledError) {
+              commitMessages((current) =>
+                current.flatMap((message) => {
+                  if (message.id !== assistantId) return [message]
+                  return message.content || message.activities?.length
+                    ? [
+                        {
+                          ...message,
+                          activities: failActiveChatActivities(
+                            message.activities,
+                          ),
+                          status: 'stopped' as const,
+                        },
+                      ]
+                    : []
+                }),
+              )
+            } else {
+              const messageText =
+                error instanceof Error
+                  ? error.message
+                  : 'Khloei could not complete that response.'
+              commitMessages((current) =>
+                current.map((message) =>
+                  message.id === assistantId
+                    ? {
+                        ...message,
+                        activities: failActiveChatActivities(
+                          message.activities,
+                        ),
+                        content: message.content
+                          ? `${message.content}\n\n> ${messageText}`
+                          : messageText,
+                        status: 'error',
+                      }
+                    : message,
+                ),
+              )
+            }
           }
         } finally {
           if (abortRef.current === controller) {
@@ -294,8 +583,45 @@ export function ChatShell() {
         }
       })()
     },
-    [],
+    [
+      clearBackgroundState,
+      commitMessages,
+      flushBackgroundCheckpoint,
+      scheduleBackgroundCheckpoint,
+    ],
   )
+
+  useEffect(() => {
+    if (abortRef.current) return
+    const background = readActiveBackgroundChat()
+    if (!background) return
+
+    let cancelled = false
+    queueMicrotask(() => {
+      if (cancelled || abortRef.current) return
+      const restoredMessages = background.messages.map((message) =>
+        message.id === background.assistantId
+          ? { ...message, status: 'streaming' as const }
+          : message,
+      )
+      commitMessages(() => restoredMessages)
+
+      const previousAssistant = [...restoredMessages]
+        .reverse()
+        .find(
+          (message) =>
+            message.role === 'assistant' &&
+            message.id !== background.assistantId &&
+            message.responseId,
+        )
+      previousResponseIdRef.current = previousAssistant?.responseId ?? null
+      requestAssistant({ assistantId: background.assistantId, background })
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [commitMessages, requestAssistant])
 
   const submit = useCallback(
     (submission: PromptSubmission) => {
@@ -326,7 +652,7 @@ export function ChatShell() {
       const previousResponseId = previousResponseIdRef.current ?? undefined
 
       submissionsRef.current.set(userId, normalizedSubmission)
-      setMessages((current) => [
+      commitMessages((current) => [
         ...current,
         {
           attachments: attachments.length ? attachments : undefined,
@@ -348,7 +674,7 @@ export function ChatShell() {
         submission: normalizedSubmission,
       })
     },
-    [requestAssistant],
+    [commitMessages, requestAssistant],
   )
 
   const regenerateAssistant = useCallback(
@@ -395,7 +721,7 @@ export function ChatShell() {
       }
 
       previousResponseIdRef.current = prepared.previousResponseId ?? null
-      setMessages([
+      commitMessages(() => [
         ...prepared.nextMessages,
         {
           content: '',
@@ -410,7 +736,7 @@ export function ChatShell() {
         submission,
       })
     },
-    [requestAssistant],
+    [commitMessages, requestAssistant],
   )
 
   const submitFollowUp = useCallback(
