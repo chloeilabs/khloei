@@ -1,0 +1,226 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./chat.css";
+@import "./prompt-input.css";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --radius-sm: calc(var(--radius) * 0.75);
+  --radius-md: calc(var(--radius) * 0.875);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.5);
+}
+
+:root {
+  color-scheme: light dark;
+  --background: #ffffff;
+  --foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --border: oklch(0.922 0 0);
+  --radius: 0.625rem;
+  --ease-swift: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --shadow-medium: 0 8px 30px rgb(0 0 0 / 0.12);
+  --shadow-tooltip: 0 4px 8px rgb(0 0 0 / 0.04),
+    0 1px 1px rgb(0 0 0 / 0.02);
+  --z-nav: 100;
+  --z-overlay: 1000;
+  --app-column-max: 46rem;
+  --app-column-gutter: 1.5rem;
+  --khloei-prompt-glass: color-mix(
+    in oklab,
+    var(--foreground) 5%,
+    transparent
+  );
+  --khloei-menu-glass: color-mix(
+    in oklab,
+    var(--foreground) 8%,
+    var(--background) 80%
+  );
+  --khloei-glass-highlight: rgb(255 255 255 / 0.32);
+  --khloei-glass-shade: rgb(15 15 15 / 0.04);
+  --khloei-glass-edge: color-mix(
+    in oklab,
+    var(--foreground) 10%,
+    transparent
+  );
+  --khloei-glass-lift: 0 10px 28px rgb(15 15 15 / 0.06);
+  --syntax-keyword: #8250df;
+  --syntax-string: #0a7a33;
+  --syntax-number: #0969da;
+  --syntax-delete: #cf222e;
+  background: var(--background);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+main {
+  min-height: 100%;
+  margin: 0;
+}
+
+body,
+main {
+  background: var(--background);
+}
+
+body {
+  color: var(--foreground);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+main {
+  min-height: 100dvh;
+}
+
+.zoom-trigger {
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.zoom-trigger:focus-visible {
+  outline: 2px solid var(--foreground);
+  outline-offset: 3px;
+}
+
+.zoom-trigger[data-zoomed] img {
+  visibility: hidden;
+}
+
+.zoom-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-overlay);
+  cursor: zoom-out;
+  outline: none;
+}
+
+.zoom-overlay-backdrop {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in oklab, var(--background) 94%, transparent);
+  opacity: 0;
+  transition: opacity 300ms var(--ease-swift);
+}
+
+.zoom-overlay[data-state='open'] .zoom-overlay-backdrop {
+  opacity: 1;
+}
+
+.zoom-overlay img {
+  position: fixed;
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--muted) 70%, var(--background));
+  object-fit: contain;
+  will-change: transform;
+  transition:
+    transform 300ms var(--ease-swift),
+    box-shadow 300ms var(--ease-swift);
+}
+
+.zoom-overlay[data-state='open'] img {
+  box-shadow: 0 24px 70px rgb(0 0 0 / 0.28);
+}
+
+.zoom-overlay-marks {
+  --zoom-corner-arm: 9px;
+  position: fixed;
+  background:
+    linear-gradient(currentColor, currentColor) left top /
+      var(--zoom-corner-arm) 1px no-repeat,
+    linear-gradient(currentColor, currentColor) left top / 1px
+      var(--zoom-corner-arm) no-repeat,
+    linear-gradient(currentColor, currentColor) right top /
+      var(--zoom-corner-arm) 1px no-repeat,
+    linear-gradient(currentColor, currentColor) right top / 1px
+      var(--zoom-corner-arm) no-repeat,
+    linear-gradient(currentColor, currentColor) left bottom /
+      var(--zoom-corner-arm) 1px no-repeat,
+    linear-gradient(currentColor, currentColor) left bottom / 1px
+      var(--zoom-corner-arm) no-repeat,
+    linear-gradient(currentColor, currentColor) right bottom /
+      var(--zoom-corner-arm) 1px no-repeat,
+    linear-gradient(currentColor, currentColor) right bottom / 1px
+      var(--zoom-corner-arm) no-repeat;
+  color: var(--foreground);
+  opacity: 0;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 120ms ease;
+}
+
+.zoom-overlay[data-state='open'] .zoom-overlay-marks {
+  opacity: 0.55;
+  transition: opacity 200ms ease 140ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #000000;
+    --foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: var(--foreground);
+    --primary: oklch(0.922 0 0);
+    --primary-foreground: oklch(0.205 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --border: oklch(1 0 0 / 10%);
+    --khloei-prompt-glass: color-mix(
+      in oklab,
+      var(--foreground) 15%,
+      transparent
+    );
+    --khloei-menu-glass: color-mix(
+      in oklab,
+      var(--foreground) 36%,
+      var(--background) 55%
+    );
+    --khloei-glass-highlight: rgb(255 255 255 / 0.22);
+    --khloei-glass-shade: rgb(255 255 255 / 0.05);
+    --khloei-glass-edge: color-mix(
+      in oklab,
+      var(--foreground) 18%,
+      transparent
+    );
+    --khloei-glass-lift: 0 12px 32px rgb(0 0 0 / 0.4);
+    --syntax-keyword: #ff7b72;
+    --syntax-string: #a5d6ff;
+    --syntax-number: #d2a8ff;
+    --syntax-delete: #ffa198;
+  }
+}
+
+@media (max-width: 39.99rem) {
+  :root {
+    --app-column-gutter: 1rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zoom-overlay-backdrop,
+  .zoom-overlay img,
+  .zoom-overlay-marks {
+    transition: none;
+  }
+}
