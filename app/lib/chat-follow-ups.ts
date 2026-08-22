@@ -13,6 +13,8 @@ export type ChatFollowUpContextMessage = {
   role: 'assistant' | 'user'
 }
 
+const FOLLOW_UP_OMISSION_MARKER = '\n\n[…content omitted…]\n\n'
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
@@ -108,9 +110,61 @@ function validateFollowUpMessages(
     messages.length >= 2 &&
     messages.length <= FOLLOW_UP_REQUEST_MAX_MESSAGES &&
     totalChars <= FOLLOW_UP_REQUEST_MAX_TOTAL_CHARS &&
+    messages.every(
+      (message) =>
+        message.content.trim().length > 0 &&
+        message.content.length <= FOLLOW_UP_REQUEST_MAX_MESSAGE_CHARS,
+    ) &&
     lastMessage?.role === 'assistant' &&
     lastMessage.content.trim().length > 0
   )
+}
+
+function compactFollowUpMessageContent(content: string) {
+  const normalized = content.trim()
+  if (normalized.length <= FOLLOW_UP_REQUEST_MAX_MESSAGE_CHARS) {
+    return normalized
+  }
+
+  const available =
+    FOLLOW_UP_REQUEST_MAX_MESSAGE_CHARS - FOLLOW_UP_OMISSION_MARKER.length
+  const headLength = Math.floor(available / 2)
+  const tailLength = available - headLength
+
+  return [
+    normalized.slice(0, headLength).trimEnd(),
+    FOLLOW_UP_OMISSION_MARKER,
+    normalized.slice(-tailLength).trimStart(),
+  ].join('')
+}
+
+export function compactFollowUpMessages(
+  messages: readonly ChatFollowUpContextMessage[],
+): ChatFollowUpContextMessage[] {
+  const bounded = messages
+    .filter((message) => message.content.trim().length > 0)
+    .slice(-FOLLOW_UP_REQUEST_MAX_MESSAGES)
+    .map((message) => ({
+      content: compactFollowUpMessageContent(message.content),
+      role: message.role,
+    }))
+  const recent: ChatFollowUpContextMessage[] = []
+  let totalChars = 0
+
+  for (let index = bounded.length - 1; index >= 0; index -= 1) {
+    const message = bounded[index]
+    if (!message) continue
+    if (
+      totalChars + message.content.length >
+      FOLLOW_UP_REQUEST_MAX_TOTAL_CHARS
+    ) {
+      break
+    }
+    recent.push(message)
+    totalChars += message.content.length
+  }
+
+  return recent.reverse()
 }
 
 export function parseFollowUpRequest(
@@ -167,13 +221,12 @@ export function getFollowUpQuestionRequestTargets(
     if (requestedMessageIds.has(message.id)) return
     if ((message.followUpQuestions?.length ?? 0) > 0) return
 
-    const context = messages
-      .slice(0, index + 1)
-      .filter((item) => item.content.trim().length > 0)
-      .map((item) => ({
-        content: item.content.trim(),
+    const context = compactFollowUpMessages(
+      messages.slice(0, index + 1).map((item) => ({
+        content: item.content,
         role: item.role,
-      }))
+      })),
+    )
 
     if (!validateFollowUpMessages(context)) return
     targets.push({ assistantMessageId: message.id, messages: context })

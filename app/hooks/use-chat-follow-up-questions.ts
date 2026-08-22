@@ -13,6 +13,7 @@ import type { ChatFollowUpQuestion, ChatMessage } from '../lib/chat'
 import {
   getFollowUpQuestionRequestTargets,
   parseFollowUpQuestionsResponse,
+  type ChatFollowUpContextMessage,
 } from '../lib/chat-follow-ups'
 
 export function useChatFollowUpQuestions({
@@ -43,26 +44,21 @@ export function useChatFollowUpQuestions({
   )
 
   const requestFollowUpQuestions = useCallback(
-    (assistantMessageId: string) => {
+    (
+      assistantMessageId: string,
+      context: readonly ChatFollowUpContextMessage[],
+    ) => {
       if (requestedIdsRef.current.has(assistantMessageId)) return
       requestedIdsRef.current.add(assistantMessageId)
 
-      const sourceIndex = messagesRef.current.findIndex(
+      const sourceExists = messagesRef.current.some(
         (message) =>
           message.id === assistantMessageId && message.role === 'assistant',
       )
-      if (sourceIndex === -1) {
+      if (!sourceExists) {
         requestedIdsRef.current.delete(assistantMessageId)
         return
       }
-
-      const context = messagesRef.current
-        .slice(0, sourceIndex + 1)
-        .filter((message) => message.content.trim().length > 0)
-        .map((message) => ({
-          content: message.content.trim(),
-          role: message.role,
-        }))
       const controller = new AbortController()
       controllersRef.current.set(assistantMessageId, controller)
 
@@ -142,7 +138,7 @@ export function useChatFollowUpQuestions({
       requestedIdsRef.current,
     )
     for (const target of targets) {
-      requestFollowUpQuestions(target.assistantMessageId)
+      requestFollowUpQuestions(target.assistantMessageId, target.messages)
     }
   }, [messages, requestFollowUpQuestions, streaming])
 }
