@@ -179,7 +179,7 @@ function sessionFor(botId: string): BotSession {
  */
 function botIdOf(request: Request, fallback?: string | null): string {
   return (
-    request.headers.get("x-openbot-bot-id")?.trim() ||
+    request.headers.get("x-khloei-bot-id")?.trim() ||
     fallback?.trim() ||
     DEFAULT_BOT_ID
   );
@@ -635,7 +635,7 @@ serve<StreamData>({
     if (url.pathname === "/stream") {
       /*
        * The socket carries the Bot in the query because it cannot do it in a header. Every other call here names
-       * its Bot in `x-openbot-bot-id`, but a websocket client sends no custom headers on the upgrade,
+       * its Bot in `x-khloei-bot-id`, but a websocket client sends no custom headers on the upgrade,
        * so the stream, and only the stream, also accepts the Bot as a query parameter. The header
        * still wins where there is one.
        */

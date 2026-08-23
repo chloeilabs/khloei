@@ -71,9 +71,8 @@ Use** from the Skills menu.
 
 ## Computer Use architecture
 
-Khloei vendors the OpenBot agent-computer service at the commit documented in
-[`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md). A small Khloei wrapper
-provides local data paths. The OpenAI Agents SDK selects Khloei's published
+Khloei's computer service provides durable local data paths, browser profiles,
+files, and audit storage. The OpenAI Agents SDK selects Khloei's published
 browser and file tools, while the Next.js gateway supplies policy decisions,
 target protection, the audit chain, streaming activity, and live browser
 frames.

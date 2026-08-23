@@ -32,7 +32,7 @@ export function matchesToken(expected: string, offered: string): boolean {
  */
 export function offeredToken(headers: Headers, url: URL): string {
   if (url.pathname === "/stream") return url.searchParams.get("token") ?? "";
-  const header = headers.get("x-openbot-computer-token")?.trim();
+  const header = headers.get("x-khloei-computer-token")?.trim();
   if (header) return header;
   const authorization = headers.get("authorization")?.trim() ?? "";
   return authorization.replace(/^Bearer /i, "");

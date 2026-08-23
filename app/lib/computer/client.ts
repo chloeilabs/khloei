@@ -159,10 +159,8 @@ export function createComputerTransport(
         ...init,
         headers: {
           ...(init?.headers as Record<string, string> | undefined),
-          "x-openbot-bot-id": botId,
-          ...(options.token
-            ? { "x-openbot-computer-token": options.token }
-            : {}),
+          "x-khloei-bot-id": botId,
+          ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
         },
         signal: caller
           ? AbortSignal.any([caller, AbortSignal.timeout(timeoutMs)])

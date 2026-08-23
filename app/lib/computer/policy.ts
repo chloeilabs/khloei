@@ -1,9 +1,9 @@
 /**
  * A small, non-executable policy language for Khloei's computer gateway.
  *
- * OpenBot uses CEL for deployment policies. Khloei keeps the same deny-first,
- * default-deny, dry-run/enforce semantics but uses declarative matchers so an
- * administrator-provided rule is never evaluated as code.
+ * Khloei uses deny-first, default-deny, dry-run/enforce semantics with
+ * declarative matchers so an administrator-provided rule is never evaluated
+ * as code.
  *
  * Rules are `*`, `tool:<name>`, `intent:<name>`, `host:<hostname>`,
  * `file:<path>`, `extension:<ext>`, `element:<label>`, `actor:<id>`, or
