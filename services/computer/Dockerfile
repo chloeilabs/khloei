@@ -18,12 +18,13 @@ RUN bun install --frozen-lockfile
 
 COPY services/computer/src ./src
 
-# Durable, separate data roots. Keeping the browser profile out of the tool-visible
-# workspace prevents file tools from reading browser storage and session data.
-RUN mkdir -p /workspace /profiles
+# Durable, separate data roots. Keeping the browser profile and audit chain out of the tool-visible
+# workspace prevents file tools from reading browser storage, session data, or their own audit.
+RUN mkdir -p /workspace /profiles /audit
 ENV WORKSPACE_DIR=/workspace
 ENV PROFILES_DIR=/profiles
-VOLUME ["/workspace", "/profiles"]
+ENV AUDIT_DIR=/audit
+VOLUME ["/workspace", "/profiles", "/audit"]
 
 ENV PORT=4100
 EXPOSE 4100

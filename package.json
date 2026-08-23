@@ -6,6 +6,7 @@
     "dev": "next dev",
     "computer:dev": "bun --env-file=.env.local services/computer/src/local.ts",
     "computer:install": "bun install --cwd services/computer --frozen-lockfile",
+    "computer:test": "bun run --cwd services/computer test",
     "computer:typecheck": "bun run --cwd services/computer typecheck",
     "build": "next build",
     "start": "next start",

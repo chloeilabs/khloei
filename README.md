@@ -50,9 +50,11 @@ sending PDF, office-document, or other file attachments.
 
 `COMPUTER_TOKEN` authenticates the app to the computer service. Generate one,
 for example, with `openssl rand -hex 32`. Never prefix it with `NEXT_PUBLIC_`.
-`KHLOEI_COMPUTER_URL` is the private server-to-server address. Set
+`KHLOEI_COMPUTER_URL` is the server-to-server address. Set
 `KHLOEI_COMPUTER_PUBLIC_URL` only when the user's browser needs a different
-public WebSocket address in deployment; it defaults to the private address.
+public WebSocket address in deployment; it defaults to the server address. A
+Vercel deployment cannot reach Railway's private network, so both values use the
+Railway HTTPS domain in that topology.
 
 Start the computer and app in separate terminals:
 
@@ -107,11 +109,13 @@ The gateway enforces this order for every published browser or file tool:
 4. Send an approved action to the authenticated computer service.
 5. Append a completion or failure event.
 
-The tamper-evident NDJSON audit is stored at
-`.khloei/computer/audit/events.ndjson`. Each record includes the previous
+The tamper-evident NDJSON audit is stored by the computer service at
+`$AUDIT_DIR/events.ndjson`. Each append is fsynced and includes the previous
 record's SHA-256 hash. Typed text and file contents are deliberately omitted.
-The persistent browser profile and files live under `.khloei/computer/` too,
-which is ignored by Git.
+Locally, the audit, persistent browser profile, and files live in separate
+folders under `.khloei/computer/`, which is ignored by Git. In production,
+put all three folders on a durable volume, but keep their roots separate so
+file tools cannot read browser sessions or their own audit trail.
 
 The optional `KHLOEI_COMPUTER_POLICY` variable accepts a JSON policy. Rules are
 deny-first; supported selectors include `tool:`, `intent:`, `host:`, `file:`,
@@ -128,23 +132,39 @@ network boundary you control.
 
 ## Deployment
 
-Build the computer service from the repository root:
+The [`computer-image.yml`](./.github/workflows/computer-image.yml) workflow
+builds the computer from the repository root, publishes immutable commit and
+`latest` tags to GitHub Container Registry, then asks Railway to pull the
+published image. Building outside Railway keeps deployments independent of
+Railway's build workers while Railway continues to own the runtime and volume.
+The equivalent local build is:
 
 ```bash
 docker build -f services/computer/Dockerfile -t khloei-computer .
 ```
 
-Run it as a private service with `COMPUTER_TOKEN`, attach separate persistent
-volumes at `/workspace` and `/profiles`, and point `KHLOEI_COMPUTER_URL` at it.
-If that private address is not reachable from a user's browser, expose only the
-stream endpoint through a TLS reverse proxy and set
-`KHLOEI_COMPUTER_PUBLIC_URL` to its HTTPS address. Viewer URLs contain only
-one-use scoped tokens, never `COMPUTER_TOKEN`.
-The separation keeps file tools away from browser session storage. For the
-audit promise to remain durable, the Next.js process also needs persistent
-storage at `KHLOEI_COMPUTER_DATA_DIR`; an ephemeral serverless filesystem is not
-a durable audit sink. Keep the computer service off the public internet, or
-protect it with a private network in addition to its token.
+Run it with `COMPUTER_TOKEN` and durable storage. Railway supports one volume per
+service, so mount it at `/data` and set:
+
+```bash
+WORKSPACE_DIR=/data/workspace
+PROFILES_DIR=/data/profiles
+AUDIT_DIR=/data/audit
+```
+
+The workflow's deploy step is enabled with the repository variable
+`RAILWAY_DEPLOY_ENABLED=true` and an environment-scoped Railway project token in
+the `RAILWAY_TOKEN` GitHub Actions secret. Railway should use
+`ghcr.io/chloeilabs/khloei-computer:latest` as its image source, expose port
+4100, and require `/health` to pass before a deployment becomes active.
+
+Point both `KHLOEI_COMPUTER_URL` and `KHLOEI_COMPUTER_PUBLIC_URL` at the
+Railway HTTPS domain when the Next.js app runs on Vercel. Viewer URLs contain
+only one-use scoped tokens, never `COMPUTER_TOKEN`; all other computer endpoints
+require the root token. The audit chain is written on the Railway volume rather
+than Vercel's ephemeral function filesystem. If the computer service can share
+a private network with the app, keep its root endpoint private and expose only
+the viewer stream through a TLS proxy.
 
 The vendored service contains a shell endpoint for its container use case.
 Khloei does not publish a shell tool to the model, and its default policy denies

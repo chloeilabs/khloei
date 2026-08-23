@@ -1,6 +1,11 @@
 import { serve } from "bun";
 import type { Page } from "playwright";
 import { parseAriaSnapshot, type SnapshotElement } from "./aria-snapshot";
+import {
+  ComputerAuditInputError,
+  createComputerAuditLog,
+  parseComputerAuditInput,
+} from "./audit";
 import { isOpenPath, matchesToken, offeredToken } from "./authorisation";
 import { isPlainBotId } from "./bot-id";
 import {
@@ -38,9 +43,11 @@ import {
  * The Bot's computer: one long-lived browser, reachable over HTTP.
  *
  * Acting on a page lives in this process because only this process holds the browser. In the
- * intended deployment path, the server gateway decides whether an action may run and records the
- * audit row before calling this process. This process has no policy engine and no audit trail of its
- * own; its direct-port boundary is the computer token.
+ * intended deployment path, the server gateway decides whether an action may run and asks this
+ * process to durably append the audit row before calling the action endpoint. Keeping that
+ * tamper-evident chain beside the browser on the persistent volume lets a serverless gateway remain
+ * fail-closed without pretending its temporary filesystem is durable. The policy engine remains in
+ * the gateway; the direct-port boundary is the computer token.
  *
  * `/files/read` and `/files/write` reach the durable workspace volume, confined to
  * it by workspace.ts. Reading and writing are the two operations a Bot needs to keep notes between
@@ -65,8 +72,8 @@ import {
 /**
  * The secret every caller must present.
  *
- * This process drives a browser that holds real logins. Policy, audit, actor identity and SPIFFE
- * identity live in the server and are not on the direct computer port.
+ * This process drives a browser that holds real logins. Policy and actor identity live in the
+ * server; the durable audit writer and browser live here, behind the same token.
  *
  * Refusing to start without a token makes missing authentication a deployment failure, never an open
  * computer.
@@ -200,6 +207,10 @@ const workspace = createWorkspace(process.env.WORKSPACE_DIR ?? "/workspace");
  * mounted volume so sign-in state survives the container.
  */
 const profiles = createProfiles(process.env.PROFILES_DIR ?? "/profiles");
+// Audit data is deliberately outside the file-tool workspace and browser profile. The model cannot
+// read or alter the chain, and a Railway volume can persist all three roots under separate folders.
+const auditLog = createComputerAuditLog(process.env.AUDIT_DIR ?? "/audit");
+await auditLog.ready();
 // Rooted in the same workspace the file tools use, so a command and a written file see one
 // directory rather than two.
 const shell = createShell(process.env.WORKSPACE_DIR ?? "/workspace");
@@ -582,6 +593,41 @@ serve<StreamData>({
     if (!isOpenPath(url.pathname) && !isPlainBotId(botId)) {
       return json({ error: "That is not a usable bot id." }, 400);
     }
+    if (url.pathname === "/audit/events" && request.method === "POST") {
+      if (!rootAuthorised) return json({ error: "Not authorised." }, 401);
+      const declaredBytes = Number.parseInt(
+        request.headers.get("content-length") ?? "0",
+        10,
+      );
+      if (Number.isFinite(declaredBytes) && declaredBytes > 64 * 1024) {
+        return json({ error: "The audit event is too large." }, 413);
+      }
+      const raw = await request.text();
+      if (Buffer.byteLength(raw, "utf8") > 64 * 1024) {
+        return json({ error: "The audit event is too large." }, 413);
+      }
+      let body: unknown;
+      try {
+        body = JSON.parse(raw);
+        const input = parseComputerAuditInput(body);
+        if (input.bot !== botId) {
+          return json({ error: "The audit event names a different bot." }, 400);
+        }
+        return json(await auditLog.append(input), 201);
+      } catch (error) {
+        if (error instanceof ComputerAuditInputError || error instanceof SyntaxError) {
+          return json({ error: error.message }, 400);
+        }
+        console.error(
+          JSON.stringify({
+            type: "computer-audit-write-error",
+            error: describe(error, "The audit event could not be recorded."),
+          }),
+        );
+        return json({ error: "The audit event could not be recorded." }, 500);
+      }
+    }
+
     const session = sessionFor(botId);
 
     if (url.pathname === "/stream") {

@@ -7,6 +7,7 @@
     "dev": "bun --watch src/local.ts",
     "start": "bun src/local.ts",
     "start:container": "bun src/index.ts",
+    "test": "bun test",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -1,8 +1,6 @@
 import 'server-only'
 
-import { createHash, randomUUID } from 'node:crypto'
-import { appendFile, mkdir, readFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
+import { createComputerTransport } from './client'
 
 export type ComputerAuditDecision = {
   allowed: boolean
@@ -69,7 +67,6 @@ const sensitiveKeys = new Set([
 ])
 
 let appendQueue: Promise<void> = Promise.resolve()
-let cachedLastHash: string | null | undefined
 
 function normalizedKey(key: string) {
   return key.replaceAll(/[^a-zA-Z0-9]/g, '').toLowerCase()
@@ -90,73 +87,66 @@ function redact(value: unknown): unknown {
   )
 }
 
-function auditPath() {
-  const configured = process.env.KHLOEI_COMPUTER_DATA_DIR?.trim()
-  const dataRoot = configured
-    ? resolve(/* turbopackIgnore: true */ configured)
-    : resolve(
-        /* turbopackIgnore: true */ process.cwd(),
-        '.khloei/computer',
-      )
-  return resolve(dataRoot, 'audit/events.ndjson')
+function auditConfiguration() {
+  const baseUrl =
+    process.env.KHLOEI_COMPUTER_URL?.trim() ||
+    process.env.AGENT_COMPUTER_URL?.trim() ||
+    'http://127.0.0.1:4100'
+  const token = process.env.COMPUTER_TOKEN?.trim()
+  if (!token) {
+    throw new Error('COMPUTER_TOKEN is not configured on the server.')
+  }
+  return { baseUrl, token }
 }
 
-async function lastHash(path: string) {
-  if (cachedLastHash !== undefined) return cachedLastHash
-
-  try {
-    const lines = (await readFile(/* turbopackIgnore: true */ path, 'utf8'))
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-    const latest = lines.at(-1)
-    if (!latest) return (cachedLastHash = null)
-    const parsed = JSON.parse(latest) as { hash?: unknown }
-    cachedLastHash = typeof parsed.hash === 'string' ? parsed.hash : null
-  } catch (error) {
-    if (
-      error instanceof Error &&
-      'code' in error &&
-      error.code === 'ENOENT'
-    ) {
-      cachedLastHash = null
-    } else {
-      throw error
-    }
-  }
-  return cachedLastHash
+function isAuditEvent(
+  value: unknown,
+  input: ComputerAuditInput,
+): value is ComputerAuditEvent {
+  if (!value || typeof value !== 'object') return false
+  const event = value as Partial<ComputerAuditEvent>
+  return (
+    event.action === input.action &&
+    event.bot === input.bot &&
+    event.eventType === input.eventType &&
+    typeof event.hash === 'string' &&
+    /^[a-f0-9]{64}$/.test(event.hash) &&
+    typeof event.id === 'string' &&
+    event.id.length > 0 &&
+    (event.previousHash === null ||
+      (typeof event.previousHash === 'string' &&
+        /^[a-f0-9]{64}$/.test(event.previousHash))) &&
+    typeof event.recordedAt === 'string' &&
+    !Number.isNaN(Date.parse(event.recordedAt))
+  )
 }
 
 /**
- * Append one tamper-evident audit event.
+ * Append one tamper-evident audit event to the computer's durable volume.
  *
- * Calls are serialized so the hash chain and file order are the same order in
- * which actions pass through the gateway. If this write fails, the gateway does
- * not act.
+ * Calls are serialized within this server process, while the single-replica
+ * computer service serializes calls across all Vercel instances. If this
+ * request or its fsynced append fails, the gateway does not act.
  */
 export function recordComputerAuditEvent(
   input: ComputerAuditInput,
 ): Promise<ComputerAuditEvent> {
   const run = appendQueue.then(async () => {
-    const path = auditPath()
-    await mkdir(dirname(path), { recursive: true })
-    const previousHash = await lastHash(path)
-    const unsigned = {
-      ...input,
-      id: randomUUID(),
-      previousHash,
-      recordedAt: new Date().toISOString(),
-    }
-    const sanitized = redact(unsigned) as Omit<ComputerAuditEvent, 'hash'>
-    const hash = createHash('sha256')
-      .update(JSON.stringify(sanitized))
-      .digest('hex')
-    const event: ComputerAuditEvent = { ...sanitized, hash }
-    await appendFile(path, `${JSON.stringify(event)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
+    const configuration = auditConfiguration()
+    const transport = createComputerTransport({
+      token: configuration.token,
+      timeoutMs: 15_000,
     })
-    cachedLastHash = hash
+    const sanitized = redact(input) as ComputerAuditInput
+    const event = await transport.post<ComputerAuditEvent>(
+      configuration.baseUrl,
+      input.bot,
+      '/audit/events',
+      sanitized,
+    )
+    if (!isAuditEvent(event, sanitized)) {
+      throw new Error('The computer returned an invalid audit receipt.')
+    }
     return event
   })
 
@@ -165,8 +155,4 @@ export function recordComputerAuditEvent(
     () => undefined,
   )
   return run
-}
-
-export function computerAuditFilePath() {
-  return auditPath()
 }

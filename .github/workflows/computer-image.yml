@@ -1,0 +1,68 @@
+name: Build computer image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - services/computer/**
+      - .github/workflows/computer-image.yml
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: khloei-computer-image
+  cancel-in-progress: true
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/khloei-computer
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Sign in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish computer image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/computer/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Railway CLI
+        if: vars.RAILWAY_DEPLOY_ENABLED == 'true'
+        run: npm install --global @railway/cli@latest
+
+      - name: Deploy the published image to Railway
+        if: vars.RAILWAY_DEPLOY_ENABLED == 'true'
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: >-
+          railway redeploy
+          --project 791f0f7b-cdb6-41db-b54e-7b3743300d74
+          --environment production
+          --service khloei-computer
+          --from-source
+          --yes

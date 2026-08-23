@@ -1,8 +1,8 @@
 /**
  * Who may speak to a computer at all.
  *
- * This check is the boundary in front of the browser process. Policy, audit and sign-in live in the
- * API server and are not on the direct computer port.
+ * This check is the boundary in front of the browser process. Policy and actor identity live in the
+ * API server; the durable audit writer lives beside the browser behind this same boundary.
  *
  * It lives here rather than in `index.ts` because that file imports Playwright at module scope, so
  * anything in it needs Chrome merely to be imported by a test. The same reasoning moved the control

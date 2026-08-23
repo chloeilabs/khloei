@@ -9,11 +9,13 @@ const dataRoot = resolve(
 
 process.env.WORKSPACE_DIR ??= resolve(dataRoot, 'workspace')
 process.env.PROFILES_DIR ??= resolve(dataRoot, 'profiles')
+process.env.AUDIT_DIR ??= resolve(dataRoot, 'audit')
 process.env.COMPUTER_BOT_ID ??= 'khloei'
 
 await Promise.all([
   mkdir(process.env.WORKSPACE_DIR, { recursive: true }),
   mkdir(process.env.PROFILES_DIR, { recursive: true }),
+  mkdir(process.env.AUDIT_DIR, { recursive: true }),
 ])
 
 await import('./index')
