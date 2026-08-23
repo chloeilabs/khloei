@@ -8,6 +8,7 @@ import {
 } from "./audit";
 import { isOpenPath, matchesToken, offeredToken } from "./authorisation";
 import { isPlainBotId } from "./bot-id";
+import { prepareComputerDataDirectories } from "./data-directories";
 import {
   type Control,
   ControlError,
@@ -192,7 +193,8 @@ function botIdOf(request: Request, fallback?: string | null): string {
  * would only add a syscall to every call. Everything about why confinement is harder than it looks
  * lives in workspace.ts.
  */
-const workspace = createWorkspace(process.env.WORKSPACE_DIR ?? "/workspace");
+const dataDirectories = await prepareComputerDataDirectories();
+const workspace = createWorkspace(dataDirectories.workspace);
 
 /**
  * Who has the wheel, as a state machine in its own module.
@@ -206,14 +208,14 @@ const workspace = createWorkspace(process.env.WORKSPACE_DIR ?? "/workspace");
  * `chromium.launch()` gives a fresh anonymous profile every time. Persistent profiles live on a
  * mounted volume so sign-in state survives the container.
  */
-const profiles = createProfiles(process.env.PROFILES_DIR ?? "/profiles");
+const profiles = createProfiles(dataDirectories.profiles);
 // Audit data is deliberately outside the file-tool workspace and browser profile. The model cannot
 // read or alter the chain, and a Railway volume can persist all three roots under separate folders.
-const auditLog = createComputerAuditLog(process.env.AUDIT_DIR ?? "/audit");
+const auditLog = createComputerAuditLog(dataDirectories.audit);
 await auditLog.ready();
 // Rooted in the same workspace the file tools use, so a command and a written file see one
 // directory rather than two.
-const shell = createShell(process.env.WORKSPACE_DIR ?? "/workspace");
+const shell = createShell(dataDirectories.workspace);
 
 /**
  * The id normally arrives as a header on every request. This is the fallback for a caller that has no

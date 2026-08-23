@@ -1,0 +1,10 @@
+.git
+.github
+.khloei
+.next
+.vercel
+.env*
+node_modules
+services/computer
+coverage
+*.tsbuildinfo
