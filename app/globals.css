@@ -1,4 +1,6 @@
-@import "tailwindcss";
+@import "tailwindcss" source(none);
+@source ".";
+@source "../components";
 @import "tw-animate-css";
 @import "./chat.css";
 @import "./prompt-input.css";

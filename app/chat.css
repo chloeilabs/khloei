@@ -547,6 +547,422 @@ html:has(.prompt-input-shell[data-docked]) {
   margin-bottom: 0.75rem;
 }
 
+.computer-frame {
+  position: relative;
+  width: min(100%, 48rem);
+  margin: 0 0 1rem;
+  padding: 0.4rem;
+  overflow: hidden;
+}
+
+.computer-frame-backdrop {
+  position: fixed;
+  z-index: var(--z-overlay);
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: color-mix(in oklab, #000 48%, transparent);
+  backdrop-filter: blur(14px) saturate(115%);
+  cursor: default;
+  -webkit-backdrop-filter: blur(14px) saturate(115%);
+}
+
+.computer-frame.computer-frame-expanded {
+  position: fixed;
+  z-index: calc(var(--z-overlay) + 1);
+  top: 50%;
+  left: 50%;
+  width: min(
+    calc(100vw - 2rem),
+    calc((100dvh - 11rem) * var(--computer-frame-ratio, 1.6)),
+    90rem
+  );
+  max-height: calc(100dvh - 2rem);
+  margin: 0;
+  padding: 0.55rem;
+  border-radius: 0.75rem;
+  background: var(--khloei-prompt-glass);
+  transform: translate(-50%, -50%);
+  box-shadow:
+    0 0 0 1px var(--khloei-glass-edge),
+    0 1px 0 color-mix(in oklab, white 15%, transparent) inset,
+    0 32px 90px color-mix(in oklab, #000 48%, transparent);
+}
+
+.computer-frame-expanded > .prompt-glass-layer {
+  box-shadow:
+    inset 0 1px 0 var(--khloei-glass-highlight),
+    inset 0 -1px 0 var(--khloei-glass-shade);
+}
+
+.computer-frame > :not(.prompt-glass-layer) {
+  position: relative;
+  z-index: 1;
+}
+
+.computer-frame-header {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.25rem 0.35rem 0.55rem;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  line-height: 1rem;
+}
+
+.computer-frame-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 0.35rem 0.5rem;
+}
+
+.computer-frame-toolbar-actions {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.computer-frame-browser-chrome {
+  display: grid;
+  min-width: 0;
+  gap: 0.4rem;
+  padding: 0 0.35rem 0.55rem;
+}
+
+.computer-frame-tabs {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.computer-frame-tab-list {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  gap: 0.3rem;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+
+.computer-frame-tab-list::-webkit-scrollbar {
+  display: none;
+}
+
+.computer-frame-tab {
+  display: inline-flex;
+  min-width: 7.5rem;
+  max-width: 13rem;
+  flex: 1 0 8rem;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid
+    color-mix(in oklab, var(--foreground) 8%, transparent);
+  border-radius: 0.55rem;
+  background: color-mix(in oklab, var(--foreground) 3%, transparent);
+  color: var(--muted-foreground);
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease;
+}
+
+.computer-frame-tab[data-active] {
+  border-color: color-mix(
+    in oklab,
+    var(--khloei-glass-edge) 70%,
+    var(--foreground) 12%
+  );
+  background: var(--khloei-prompt-glass);
+  box-shadow: inset 0 1px 0 var(--khloei-glass-highlight);
+  color: var(--foreground);
+}
+
+.computer-frame-tab-select {
+  min-width: 0;
+  flex: 1;
+  padding: 0.34rem 0.25rem 0.34rem 0.55rem;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.6875rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.computer-frame-tab-select span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.computer-frame-tab-select:disabled {
+  cursor: default;
+}
+
+.computer-frame-tab-close,
+.computer-frame-new-tab {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  border: 1px solid color-mix(in oklab, var(--foreground) 8%, transparent);
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.computer-frame-tab-close {
+  width: 1.45rem;
+  height: 1.45rem;
+  margin-right: 0.18rem;
+  border-color: transparent;
+  border-radius: 999px;
+  background: transparent;
+}
+
+.computer-frame-new-tab {
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 999px;
+  box-shadow: inset 0 1px 0 var(--khloei-glass-highlight);
+  backdrop-filter: blur(12px) saturate(120%);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
+}
+
+.computer-frame-tab-close:hover:not(:disabled),
+.computer-frame-new-tab:hover:not(:disabled) {
+  background: color-mix(in oklab, var(--foreground) 10%, transparent);
+  color: var(--foreground);
+}
+
+.computer-frame-tab-close:disabled,
+.computer-frame-new-tab:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.computer-frame-address {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.27rem 0.35rem 0.27rem 0.55rem;
+  overflow: hidden;
+  border-radius: 0.55rem;
+  isolation: isolate;
+  color: var(--muted-foreground);
+}
+
+.computer-frame-address > :not(.prompt-glass-layer) {
+  position: relative;
+  z-index: 1;
+}
+
+.computer-frame-address input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.6875rem;
+  line-height: 1.1rem;
+}
+
+.computer-frame-address input::placeholder {
+  color: var(--muted-foreground);
+}
+
+.computer-frame-address button {
+  display: inline-grid;
+  width: 1.55rem;
+  height: 1.55rem;
+  flex: none;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--foreground) 7%, transparent);
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.computer-frame-address input:disabled,
+.computer-frame-address button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.computer-frame-status,
+.computer-frame-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.6875rem;
+  line-height: 1rem;
+}
+
+.computer-frame-status {
+  color: var(--muted-foreground);
+}
+
+.computer-frame-status[data-state='live'] svg {
+  color: color-mix(in oklab, #34c759 75%, var(--foreground));
+}
+
+.computer-frame-control {
+  position: relative;
+  padding: 0.28rem 0.55rem;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  isolation: isolate;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+}
+
+.computer-frame-control > :not(.prompt-glass-layer),
+.computer-frame-control-label {
+  position: relative;
+  z-index: 1;
+}
+
+.computer-frame-control-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.computer-frame-control:disabled {
+  color: var(--muted-foreground);
+  cursor: default;
+  opacity: 0.62;
+}
+
+.computer-frame-control:focus-visible,
+.computer-frame-tab-select:focus-visible,
+.computer-frame-tab-close:focus-visible,
+.computer-frame-new-tab:focus-visible,
+.computer-frame-address input:focus-visible,
+.computer-frame-address button:focus-visible,
+.computer-frame-screen[data-interactive]:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--foreground) 35%, transparent);
+  outline-offset: 3px;
+}
+
+.computer-frame-title {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--foreground);
+  font-weight: 560;
+}
+
+.computer-frame-location {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.computer-frame-screen {
+  position: relative;
+  display: grid;
+  width: 100%;
+  max-height: 28rem;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in oklab, var(--foreground) 10%, transparent);
+  border-radius: calc(var(--radius) - 0.35rem);
+  background: #fff;
+}
+
+.computer-frame-screen[data-interactive] {
+  cursor: default;
+  touch-action: none;
+  user-select: none;
+}
+
+.computer-frame-expanded .computer-frame-screen {
+  max-height: none;
+}
+
+.computer-frame-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  object-position: top center;
+}
+
+.computer-frame-secret {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.65rem 0.35rem 0.2rem;
+}
+
+.computer-frame-secret label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+}
+
+.computer-frame-secret-row {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.computer-frame-secret-row input {
+  min-width: 0;
+  flex: 1;
+  padding: 0.42rem 0.55rem;
+  border: 1px solid color-mix(in oklab, var(--foreground) 14%, transparent);
+  border-radius: 0.55rem;
+  outline: none;
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  color: var(--foreground);
+  font: inherit;
+}
+
+.computer-frame-secret-row input:focus {
+  border-color: color-mix(in oklab, var(--foreground) 30%, transparent);
+}
+
+.computer-frame-secret-row button {
+  padding: 0.42rem 0.6rem;
+  border: 0;
+  border-radius: 0.55rem;
+  background: color-mix(in oklab, var(--foreground) 9%, transparent);
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.computer-frame-notice {
+  margin: 0;
+  padding: 0.55rem 0.35rem 0.15rem;
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  line-height: 1.35;
+}
+
 .activity-trigger {
   display: flex;
   max-width: 100%;
@@ -734,6 +1150,28 @@ html:has(.prompt-input-shell[data-docked]) {
   .chat-message-images {
     max-width: 88%;
   }
+
+  .computer-frame.computer-frame-expanded {
+    width: min(
+      calc(100vw - 1rem),
+      calc((100dvh - 11rem) * var(--computer-frame-ratio, 1.6))
+    );
+    max-height: calc(100dvh - 1rem);
+  }
+
+  .computer-frame-toolbar {
+    align-items: flex-start;
+  }
+
+  .computer-frame-toolbar-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .computer-frame-tab {
+    min-width: 7rem;
+    flex-basis: 7rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -745,6 +1183,10 @@ html:has(.prompt-input-shell[data-docked]) {
   }
 
   .activity-chevron {
+    transition: none;
+  }
+
+  .computer-frame-tab {
     transition: none;
   }
 

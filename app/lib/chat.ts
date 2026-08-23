@@ -30,6 +30,27 @@ export type ChatWebSearchAction =
       url: string
     }
 
+export type ChatComputerAction = {
+  action: string
+  auditEventId?: string
+  decision?: {
+    allowed: boolean
+    reason: string
+    rule: string | null
+  }
+  detail?: string
+  stage: 'deciding' | 'approved' | 'refused' | 'completed' | 'failed'
+  target?: string
+}
+
+export type ChatComputerFrame = {
+  capturedAt: string
+  dataUrl: string
+  height: number
+  url?: string
+  width: number
+}
+
 export type ChatActivityStatus =
   | 'in_progress'
   | 'searching'
@@ -38,8 +59,9 @@ export type ChatActivityStatus =
 
 export type ChatActivity = {
   action?: ChatWebSearchAction
+  computer?: ChatComputerAction
   id: string
-  kind: 'reasoning' | 'web_search'
+  kind: 'computer' | 'reasoning' | 'web_search'
   status: ChatActivityStatus
   summary?: string
 }
@@ -48,6 +70,7 @@ export type ChatMessage = {
   activities?: ChatActivity[]
   attachments?: ChatAttachment[]
   content: string
+  computerFrame?: ChatComputerFrame
   followUpQuestions?: ChatFollowUpQuestion[]
   followUpQuestionsPending?: boolean
   id: string
@@ -59,6 +82,7 @@ export type ChatMessage = {
 
 export type ChatStreamEvent =
   | { activity: ChatActivity; type: 'activity' }
+  | { frame: ChatComputerFrame; type: 'computer-frame' }
   | {
       responseId: string
       resumeToken: string

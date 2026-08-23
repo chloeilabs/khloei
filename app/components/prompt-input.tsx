@@ -17,6 +17,7 @@ import {
   ChevronRight,
   Image as ImageIcon,
   Loader2,
+  MonitorCog,
   Paperclip,
   Plus,
   Square,
@@ -34,6 +35,8 @@ import {
   type PromptAttachment,
 } from './prompt-attachments'
 import { PromptGlass } from './prompt-glass'
+import { ModelSelector } from './model-selector'
+import type { ChatModelId } from '../lib/chat-models'
 
 type Phase = 'idle' | 'enhancing' | 'enhanced'
 
@@ -47,7 +50,9 @@ export type PromptSubmission = {
 
 type PromptInputProps = {
   docked?: boolean
+  modelId: ChatModelId
   onNewChat?: () => void
+  onModelChange: (modelId: ChatModelId) => void
   onStop?: () => void
   onSubmit?: (submission: PromptSubmission) => void
   shellRef?: Ref<HTMLDivElement>
@@ -66,6 +71,7 @@ const skillName = (id: PromptSkillId) =>
   PROMPT_SKILLS.find((skill) => skill.id === id)?.name ?? id
 
 const PROMPT_SKILL_ICONS = {
+  'computer-use': MonitorCog,
   'deep-research': Telescope,
 } satisfies Record<PromptSkillId, typeof Telescope>
 
@@ -80,6 +86,64 @@ const escapeHtml = (value: string) =>
     (character) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[character] ?? character,
   )
+
+const promptSkillIds = new Set<PromptSkillId>(
+  PROMPT_SKILLS.map((skill) => skill.id),
+)
+
+function promptSkillId(value: string | undefined) {
+  return value && promptSkillIds.has(value as PromptSkillId)
+    ? (value as PromptSkillId)
+    : null
+}
+
+function removeSkillPill(pill: HTMLElement) {
+  const separator = pill.nextSibling
+  if (
+    separator?.nodeType === Node.TEXT_NODE &&
+    separator.textContent?.startsWith('\u00A0')
+  ) {
+    const rest = separator.textContent.slice(1)
+    if (rest) separator.textContent = rest
+    else separator.parentNode?.removeChild(separator)
+  }
+  pill.remove()
+}
+
+function editorMessageText(editor: HTMLElement) {
+  const parts: string[] = []
+
+  const appendNewline = () => {
+    const last = parts.at(-1)
+    if (parts.length > 0 && last && !last.endsWith('\n')) parts.push('\n')
+  }
+
+  const visit = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parts.push(node.textContent ?? '')
+      return
+    }
+    if (!(node instanceof HTMLElement) || node.dataset.skill) return
+    if (node.tagName === 'BR') {
+      parts.push('\n')
+      return
+    }
+
+    const block = node.tagName === 'DIV' || node.tagName === 'P'
+    if (block) appendNewline()
+    node.childNodes.forEach(visit)
+    if (block) appendNewline()
+  }
+
+  editor.childNodes.forEach(visit)
+  return parts
+    .join('')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n[ \t]+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
 
 function buildSkillPill(id: PromptSkillId) {
   const name = skillName(id)
@@ -103,7 +167,9 @@ function attachmentId() {
 
 export function PromptInput({
   docked = false,
+  modelId,
   onNewChat,
+  onModelChange,
   onStop,
   onSubmit,
   shellRef,
@@ -111,6 +177,8 @@ export function PromptInput({
   submitting = false,
 }: PromptInputProps) {
   const [value, setValue] = useState('')
+  const [messageText, setMessageText] = useState('')
+  const [selectedSkill, setSelectedSkill] = useState<PromptSkillId | null>(null)
   const [phase, setPhase] = useState<Phase>('idle')
   const [menuOpen, setMenuOpen] = useState(false)
   const [skillsOpen, setSkillsOpen] = useState(false)
@@ -140,12 +208,14 @@ export function PromptInput({
   const attachmentsRef = useRef<PromptAttachment[]>([])
   const removalTimersRef = useRef<Set<number>>(new Set())
 
-  const hasText = value.trim().length > 0
+  const hasEditorContent = value.trim().length > 0
+  const hasMessageText = messageText.length > 0
   const enhancing = phase === 'enhancing'
   const activeAttachments = attachments.filter((attachment) => !attachment.exiting)
   const hasAttachment = activeAttachments.length > 0
-  const canSubmit = !enhancing && !submitting && (hasText || hasAttachment)
-  const showPill = hasText && !enhancing
+  const canSubmit =
+    !enhancing && !submitting && (hasMessageText || hasAttachment)
+  const showPill = hasMessageText && !enhancing
   const slashResults = matchPromptSkills(slashQuery)
   const activeSlashIndex =
     slashResults.length === 0
@@ -189,9 +259,15 @@ export function PromptInput({
     const editor = editorRef.current
     if (!editor) return
     setValue(editor.innerText || editor.textContent || '')
-    editor
-      .querySelectorAll<HTMLElement>('.prompt-input-skill-pill')
-      .forEach((pill) => {
+    setMessageText(editorMessageText(editor))
+    const pills = Array.from(
+      editor.querySelectorAll<HTMLElement>('.prompt-input-skill-pill'),
+    )
+    setSelectedSkill(
+      pills.map((pill) => promptSkillId(pill.dataset.skill)).find(Boolean) ??
+        null,
+    )
+    pills.forEach((pill) => {
         let atStart = true
         for (let node = pill.previousSibling; node; node = node.previousSibling) {
           if (
@@ -268,6 +344,11 @@ export function PromptInput({
     range.deleteContents()
     const pill = buildSkillPill(id)
     range.insertNode(pill)
+    editor
+      .querySelectorAll<HTMLElement>('.prompt-input-skill-pill')
+      .forEach((current) => {
+        if (current !== pill) removeSkillPill(current)
+      })
     const space = document.createTextNode('\u00A0')
     pill.after(space)
     const after = document.createRange()
@@ -279,6 +360,7 @@ export function PromptInput({
     editor.focus()
     savedRange.current = after.cloneRange()
     syncFromEditor()
+    if (phase === 'enhanced') setPhase('idle')
   }
 
   const addSkillFromMenu = (id: PromptSkillId) => {
@@ -469,7 +551,6 @@ export function PromptInput({
       event.preventDefault()
       const pill = remove.closest<HTMLElement>('[data-skill]')
       if (pill) {
-        const separator = pill.nextSibling
         const width = pill.getBoundingClientRect().width
         pill.style.maxWidth = `${width}px`
         pill.style.overflow = 'hidden'
@@ -487,17 +568,9 @@ export function PromptInput({
         const finish = () => {
           if (done) return
           done = true
-          if (
-            separator &&
-            separator.nodeType === Node.TEXT_NODE &&
-            separator.textContent?.startsWith('\u00A0')
-          ) {
-            const rest = separator.textContent.slice(1)
-            if (rest) separator.textContent = rest
-            else separator.parentNode?.removeChild(separator)
-          }
-          pill.remove()
+          removeSkillPill(pill)
           syncFromEditor()
+          if (phase === 'enhanced') setPhase('idle')
           editorRef.current?.focus()
         }
         pill.addEventListener('animationend', finish, { once: true })
@@ -584,14 +657,18 @@ export function PromptInput({
   }, [phase, enhancing])
 
   const runEnhance = async () => {
-    if (!hasText || enhancing) return
+    if (!hasMessageText || enhancing) return
     preEnhanceHTML.current = editorRef.current?.innerHTML ?? ''
     setPhase('enhancing')
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
     })
-    const result = enhancePromptText(value)
-    pendingHTML.current = escapeHtml(result).replace(/\n/g, '<br>')
+    const result = enhancePromptText(messageText)
+    const skillPrefix = selectedSkill
+      ? `${buildSkillPill(selectedSkill).outerHTML}&nbsp;`
+      : ''
+    pendingHTML.current =
+      skillPrefix + escapeHtml(result).replace(/\n/g, '<br>')
     flipFrom.current = frameRef.current?.offsetHeight ?? null
     setPhase('enhanced')
   }
@@ -664,6 +741,8 @@ export function PromptInput({
     const editor = editorRef.current
     if (editor) editor.innerHTML = ''
     setValue('')
+    setMessageText('')
+    setSelectedSkill(null)
     setPhase('idle')
     clearAttachments()
     closeMenu()
@@ -684,7 +763,12 @@ export function PromptInput({
         file: attachment.file,
         kind: attachment.kind,
       })),
-      text: value,
+      text: [
+        selectedSkill ? `/${skillName(selectedSkill)}` : '',
+        messageText,
+      ]
+        .filter(Boolean)
+        .join('\n'),
     })
     clearComposer()
   }
@@ -760,7 +844,7 @@ export function PromptInput({
                 aria-multiline="true"
                 className="prompt-input-field"
                 contentEditable
-                data-empty={!hasText || undefined}
+                data-empty={!hasEditorContent || undefined}
                 data-placeholder="Ask anything"
                 onBlur={saveSelection}
                 onClick={onEditorClick}
@@ -817,39 +901,40 @@ export function PromptInput({
           </div>
 
           <div className="prompt-input-row">
-            <div
-              className="prompt-input-plus-wrap"
-              onBlur={(event) => {
-                if (event.currentTarget.contains(event.relatedTarget as Node)) {
-                  return
-                }
-                closeMenu()
-              }}
-              ref={plusRef}
-            >
-              <button
-                aria-expanded={menuOpen}
-                aria-haspopup="menu"
-                aria-label="Add attachment or skill"
-                className="prompt-input-icon-btn prompt-input-plus"
-                data-open={menuOpen || undefined}
-                disabled={enhancing}
-                onClick={() => setMenuOpen((open) => !open)}
-                ref={plusButtonRef}
-                type="button"
+            <div className="prompt-input-left">
+              <div
+                className="prompt-input-plus-wrap"
+                onBlur={(event) => {
+                  if (event.currentTarget.contains(event.relatedTarget as Node)) {
+                    return
+                  }
+                  closeMenu()
+                }}
+                ref={plusRef}
               >
-                <span className="prompt-input-plus-icon">
-                  <Plus aria-hidden size={14} strokeWidth={1.75} />
-                </span>
-              </button>
-
-              {menuOpen ? (
-                <div
+                <button
+                  aria-expanded={menuOpen}
+                  aria-haspopup="menu"
                   aria-label="Add attachment or skill"
-                  className="prompt-input-menu"
-                  role="menu"
+                  className="prompt-input-icon-btn prompt-input-plus"
+                  data-open={menuOpen || undefined}
+                  disabled={enhancing}
+                  onClick={() => setMenuOpen((open) => !open)}
+                  ref={plusButtonRef}
+                  type="button"
                 >
-                  <PromptGlass />
+                  <span className="prompt-input-plus-icon">
+                    <Plus aria-hidden size={14} strokeWidth={1.75} />
+                  </span>
+                </button>
+
+                {menuOpen ? (
+                  <div
+                    aria-label="Add attachment or skill"
+                    className="prompt-input-menu"
+                    role="menu"
+                  >
+                    <PromptGlass />
                   <button
                     className="prompt-input-menu-item"
                     disabled={imageCount >= MAX_IMAGES}
@@ -950,8 +1035,15 @@ export function PromptInput({
                       </div>
                     ) : null}
                   </div>
-                </div>
-              ) : null}
+                  </div>
+                ) : null}
+              </div>
+              <ModelSelector
+                disabled={enhancing || submitting}
+                mode={selectedSkill === 'deep-research' ? 'deep-research' : undefined}
+                onChange={onModelChange}
+                value={modelId}
+              />
             </div>
 
             <div className="prompt-input-right">

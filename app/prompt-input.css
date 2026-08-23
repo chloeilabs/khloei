@@ -478,7 +478,19 @@
   gap: 0.5rem;
 }
 
+.prompt-input-left {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.375rem;
+}
+
 .prompt-input-plus-wrap {
+  position: relative;
+  display: flex;
+}
+
+.prompt-input-model-selector {
   position: relative;
   display: flex;
 }
@@ -711,6 +723,103 @@
   transform: scale(0.98);
 }
 
+.prompt-input-pill:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.prompt-input-pill:disabled:hover::before,
+.prompt-input-pill:disabled:active::before {
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+  transform: none;
+}
+
+.prompt-input-model-trigger {
+  max-width: 10rem;
+  gap: 0.3rem;
+}
+
+.prompt-input-model-trigger[data-open]::before {
+  background: color-mix(in oklab, var(--foreground) 12%, transparent);
+}
+
+.prompt-input-model-trigger-icon,
+.prompt-input-model-trigger-chevron,
+.prompt-input-model-check {
+  display: inline-flex;
+  flex: none;
+  color: var(--muted-foreground);
+}
+
+.prompt-input-model-trigger-chevron {
+  margin-right: -0.125rem;
+  transition: transform 150ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.prompt-input-model-trigger[data-open]
+  .prompt-input-model-trigger-chevron {
+  transform: rotate(180deg);
+}
+
+.prompt-input-model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.prompt-input-model-menu {
+  width: 13.5rem;
+}
+
+.prompt-input-model-label {
+  position: relative;
+  z-index: 1;
+  padding: 0.2rem 0.5rem 0.3rem;
+  color: color-mix(
+    in oklab,
+    var(--foreground) 50%,
+    var(--muted-foreground)
+  );
+  font-size: 0.6875rem;
+  line-height: 1.2;
+}
+
+.prompt-input-model-option {
+  height: 2.6rem;
+}
+
+.prompt-input-model-option[aria-checked='true'] {
+  background: color-mix(in oklab, var(--foreground) 6%, transparent);
+}
+
+.prompt-input-model-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.prompt-input-model-title,
+.prompt-input-model-provider {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-input-model-title {
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.prompt-input-model-provider {
+  color: color-mix(
+    in oklab,
+    var(--foreground) 50%,
+    var(--muted-foreground)
+  );
+  font-size: 0.65rem;
+}
+
 .prompt-input-spinner-btn {
   cursor: default;
 }
@@ -824,6 +933,17 @@
 }
 
 @media (max-width: 25rem) {
+  .prompt-input-model-trigger {
+    width: 1.625rem;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .prompt-input-model-name,
+  .prompt-input-model-trigger-chevron {
+    display: none;
+  }
+
   .prompt-input-menu-flyout-slot {
     right: 0;
     bottom: calc(100% + 0.375rem);
@@ -840,7 +960,8 @@
   .prompt-input-icon-btn::before,
   .prompt-input-pill::before,
   .prompt-input-plus-icon,
-  .prompt-input-menu-chevron {
+  .prompt-input-menu-chevron,
+  .prompt-input-model-trigger-chevron {
     transition: none;
   }
 

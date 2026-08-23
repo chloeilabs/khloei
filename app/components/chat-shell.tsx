@@ -26,6 +26,14 @@ import type {
   ChatMessage as ChatMessageValue,
   ChatStreamEvent,
 } from '../lib/chat'
+import {
+  DEFAULT_CHAT_MODEL_ID,
+  type ChatModelId,
+} from '../lib/chat-models'
+import {
+  compactChatHistory,
+  type ChatHistoryMessage,
+} from '../lib/chat-history'
 import { prepareChatRegenerate } from '../lib/chat-regenerate'
 import { ChatMessages } from './chat-messages'
 import { ChatScrollToBottom } from './chat-scroll-to-bottom'
@@ -71,7 +79,9 @@ function streamEvent(value: unknown): ChatStreamEvent | null {
   if (event.type === 'activity' && event.activity) {
     const activity = event.activity as Record<string, unknown>
     const validKind =
-      activity.kind === 'reasoning' || activity.kind === 'web_search'
+      activity.kind === 'computer' ||
+      activity.kind === 'reasoning' ||
+      activity.kind === 'web_search'
     const validStatus =
       activity.status === 'in_progress' ||
       activity.status === 'searching' ||
@@ -81,6 +91,25 @@ function streamEvent(value: unknown): ChatStreamEvent | null {
       return {
         activity: event.activity as ChatActivity,
         type: 'activity',
+      }
+    }
+  }
+  if (event.type === 'computer-frame' && event.frame) {
+    const frame = event.frame as Record<string, unknown>
+    if (
+      typeof frame.capturedAt === 'string' &&
+      typeof frame.dataUrl === 'string' &&
+      frame.dataUrl.startsWith('data:image/png;base64,') &&
+      typeof frame.height === 'number' &&
+      typeof frame.width === 'number' &&
+      (frame.url === undefined || typeof frame.url === 'string')
+    ) {
+      return {
+        frame: event.frame as Extract<
+          ChatStreamEvent,
+          { type: 'computer-frame' }
+        >['frame'],
+        type: 'computer-frame',
       }
     }
   }
@@ -185,8 +214,11 @@ function imageUrlsInMessages(messages: readonly ChatMessageValue[]) {
   )
 }
 
+const STREAM_RENDER_INTERVAL_MS = 32
+
 export function ChatShell() {
   const [messages, setMessages] = useState<ChatMessageValue[]>([])
+  const [modelId, setModelId] = useState<ChatModelId>(DEFAULT_CHAT_MODEL_ID)
   const [streaming, setStreaming] = useState(false)
   const activeBackgroundRef = useRef<BackgroundConnection | null>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -194,6 +226,7 @@ export function ChatShell() {
     ChatMessageValue[] | null
   >(null)
   const backgroundCheckpointTimerRef = useRef<number | null>(null)
+  const streamRenderTimerRef = useRef<number | null>(null)
   const messageImageUrlsRef = useRef(new Set<string>())
   const messagesRef = useRef<ChatMessageValue[]>([])
   const previousResponseIdRef = useRef<string | null>(null)
@@ -209,6 +242,10 @@ export function ChatShell() {
 
   const commitMessages = useCallback(
     (update: (current: ChatMessageValue[]) => ChatMessageValue[]) => {
+      if (streamRenderTimerRef.current !== null) {
+        window.clearTimeout(streamRenderTimerRef.current)
+        streamRenderTimerRef.current = null
+      }
       const next = update(messagesRef.current)
       messagesRef.current = next
       setMessages(next)
@@ -216,6 +253,25 @@ export function ChatShell() {
     },
     [],
   )
+
+  const commitStreamingMessages = useCallback(
+    (update: (current: ChatMessageValue[]) => ChatMessageValue[]) => {
+      const next = update(messagesRef.current)
+      messagesRef.current = next
+      if (streamRenderTimerRef.current === null) {
+        streamRenderTimerRef.current = window.setTimeout(() => {
+          streamRenderTimerRef.current = null
+          setMessages(messagesRef.current)
+        }, STREAM_RENDER_INTERVAL_MS)
+      }
+      return next
+    },
+    [],
+  )
+
+  const selectModel = useCallback((nextModelId: ChatModelId) => {
+    setModelId(nextModelId)
+  }, [])
 
   const flushBackgroundCheckpoint = useCallback(() => {
     if (backgroundCheckpointTimerRef.current !== null) {
@@ -278,6 +334,10 @@ export function ChatShell() {
   useEffect(
     () => () => {
       flushBackgroundCheckpoint()
+      if (streamRenderTimerRef.current !== null) {
+        window.clearTimeout(streamRenderTimerRef.current)
+        streamRenderTimerRef.current = null
+      }
       const controller = abortRef.current
       abortRef.current = null
       controller?.abort()
@@ -313,11 +373,15 @@ export function ChatShell() {
     ({
       assistantId,
       background,
+      history,
+      modelId: requestedModelId,
       previousResponseId,
       submission,
     }: {
       assistantId: string
       background?: ActiveBackgroundChat
+      history?: readonly ChatHistoryMessage[]
+      modelId?: ChatModelId
       previousResponseId?: string
       submission?: PromptSubmission
     }) => {
@@ -362,6 +426,12 @@ export function ChatShell() {
                 }
                 const formData = new FormData()
                 formData.append('message', submission.text)
+                if (requestedModelId) {
+                  formData.append('model', requestedModelId)
+                }
+                if (history?.length) {
+                  formData.append('history', JSON.stringify(history))
+                }
                 if (previousResponseId) {
                   formData.append('previousResponseId', previousResponseId)
                 }
@@ -411,6 +481,14 @@ export function ChatShell() {
                         : message,
                     ),
                   )
+                } else if (event.type === 'computer-frame') {
+                  commitMessages((current) =>
+                    current.map((message) =>
+                      message.id === assistantId
+                        ? { ...message, computerFrame: event.frame }
+                        : message,
+                    ),
+                  )
                 } else if (event.type === 'background') {
                   const active: BackgroundConnection = {
                     assistantId,
@@ -436,7 +514,7 @@ export function ChatShell() {
                     scheduleBackgroundCheckpoint()
                   }
                 } else if (event.type === 'text-delta') {
-                  commitMessages((current) =>
+                  commitStreamingMessages((current) =>
                     current.map((message) =>
                       message.id === assistantId
                         ? { ...message, content: message.content + event.delta }
@@ -586,6 +664,7 @@ export function ChatShell() {
     [
       clearBackgroundState,
       commitMessages,
+      commitStreamingMessages,
       flushBackgroundCheckpoint,
       scheduleBackgroundCheckpoint,
     ],
@@ -650,6 +729,12 @@ export function ChatShell() {
       const userId = crypto.randomUUID()
       const assistantId = crypto.randomUUID()
       const previousResponseId = previousResponseIdRef.current ?? undefined
+      const history = compactChatHistory(
+        messagesRef.current.map((item) => ({
+          content: item.content,
+          role: item.role,
+        })),
+      )
 
       submissionsRef.current.set(userId, normalizedSubmission)
       commitMessages((current) => [
@@ -670,11 +755,13 @@ export function ChatShell() {
       ])
       requestAssistant({
         assistantId,
+        history,
+        modelId,
         previousResponseId,
         submission: normalizedSubmission,
       })
     },
-    [commitMessages, requestAssistant],
+    [commitMessages, modelId, requestAssistant],
   )
 
   const regenerateAssistant = useCallback(
@@ -721,6 +808,12 @@ export function ChatShell() {
       }
 
       previousResponseIdRef.current = prepared.previousResponseId ?? null
+      const history = compactChatHistory(
+        prepared.nextMessages.slice(0, -1).map((item) => ({
+          content: item.content,
+          role: item.role,
+        })),
+      )
       commitMessages(() => [
         ...prepared.nextMessages,
         {
@@ -732,11 +825,13 @@ export function ChatShell() {
       ])
       requestAssistant({
         assistantId,
+        history,
+        modelId,
         previousResponseId: prepared.previousResponseId,
         submission,
       })
     },
-    [commitMessages, requestAssistant],
+    [commitMessages, modelId, requestAssistant],
   )
 
   const submitFollowUp = useCallback(
@@ -746,12 +841,14 @@ export function ChatShell() {
     [submit],
   )
 
-  useChatFollowUpQuestions({ messages, setMessages, streaming })
+  useChatFollowUpQuestions({ messages, modelId, setMessages, streaming })
 
   const promptInput = (
     <PromptInput
       docked={hasMessages}
+      modelId={modelId}
       onNewChat={startNewChat}
+      onModelChange={selectModel}
       onStop={stopResponse}
       onSubmit={submit}
       shellRef={promptInputRef}

@@ -32,6 +32,7 @@ import type {
   ChatMessage as ChatMessageValue,
 } from '../lib/chat'
 import { ActivityPanel } from './activity-panel'
+import { ComputerFrame } from './computer-frame'
 import { PromptGlass } from './prompt-glass'
 import { ZoomImage } from './zoom-image'
 
@@ -245,10 +246,12 @@ function FollowUpQuestionsPending() {
 }
 
 export const ChatMessage = memo(function ChatMessage({
+  computerInteractive,
   message,
   onFollowUpQuestionClick,
   onRegenerate,
 }: {
+  computerInteractive?: boolean
   message: ChatMessageValue
   onFollowUpQuestionClick?: (question: string) => void
   onRegenerate?: (assistantMessageId: string) => void
@@ -337,6 +340,13 @@ export const ChatMessage = memo(function ChatMessage({
     >
       {hasActivities ? (
         <ActivityPanel activities={activities} isLive={isLive} />
+      ) : null}
+
+      {message.computerFrame ? (
+        <ComputerFrame
+          frame={message.computerFrame}
+          interactive={computerInteractive}
+        />
       ) : null}
 
       {hasContent ? (

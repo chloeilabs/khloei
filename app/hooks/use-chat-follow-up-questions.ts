@@ -10,6 +10,7 @@ import {
 } from 'react'
 
 import type { ChatFollowUpQuestion, ChatMessage } from '../lib/chat'
+import type { ChatModelId } from '../lib/chat-models'
 import {
   getFollowUpQuestionRequestTargets,
   parseFollowUpQuestionsResponse,
@@ -18,10 +19,12 @@ import {
 
 export function useChatFollowUpQuestions({
   messages,
+  modelId,
   setMessages,
   streaming,
 }: {
   messages: ChatMessage[]
+  modelId: ChatModelId
   setMessages: Dispatch<SetStateAction<ChatMessage[]>>
   streaming: boolean
 }) {
@@ -75,7 +78,7 @@ export function useChatFollowUpQuestions({
         let followUpQuestions: ChatFollowUpQuestion[] = []
         try {
           const response = await fetch('/api/chat/follow-ups', {
-            body: JSON.stringify({ messages: context }),
+            body: JSON.stringify({ messages: context, model: modelId }),
             headers: { 'Content-Type': 'application/json' },
             method: 'POST',
             signal: controller.signal,
@@ -117,7 +120,7 @@ export function useChatFollowUpQuestions({
         )
       })()
     },
-    [setMessages],
+    [modelId, setMessages],
   )
 
   useEffect(() => {

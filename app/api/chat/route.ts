@@ -1,15 +1,38 @@
-import OpenAI from 'openai'
-import type { ResponseInputMessageContentList } from 'openai/resources/responses/responses'
+import type {
+  ResponseCreateParamsStreaming,
+  ResponseInput,
+  ResponseInputMessageContentList,
+} from 'openai/resources/responses/responses'
 
 import {
   createBackgroundResumeToken,
   isOpenAIResponseId,
 } from '../../lib/openai-background'
-import { CHAT_MODEL, DEEP_RESEARCH_MODEL } from '../../lib/chat-config'
 import {
-  createOpenAIChatStreamResponse,
+  parseChatHistory,
+  type ChatHistoryMessage,
+} from '../../lib/chat-history'
+import {
+  DEFAULT_CHAT_MODEL_ID,
+  isChatModelId,
+} from '../../lib/chat-models'
+import { DEEP_RESEARCH_MODEL } from '../../lib/chat-config'
+import { createComputerStreamResponse } from '../../lib/model-computer-stream'
+import {
+  chatModelProvider,
+  createModelClient,
+  ModelProviderConfigurationError,
+  modelResponseHeaders,
+  openRouterWebSearchTool,
+  type ModelProvider,
+  type OpenRouterWebSearchTool,
+} from '../../lib/model-provider'
+import {
+  createModelChatStreamResponse,
   openAIErrorDetails,
-} from '../../lib/openai-chat-stream'
+  openRouterErrorDetails,
+} from '../../lib/model-chat-stream'
+import { requireSameOriginRequest } from '../../lib/request-origin'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -20,6 +43,8 @@ const MAX_ATTACHMENTS = 8
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 const MAX_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const MAX_MESSAGE_LENGTH = 50_000
+const COMPUTER_USE_COMMAND = /(?:^|\s)\/computer[\s-]*use(?:\s|$)/i
+const DEEP_RESEARCH_COMMAND = /(?:^|\s)\/deep[\s-]*research(?:\s|$)/i
 const IMAGE_TYPES = new Set([
   'image/gif',
   'image/jpeg',
@@ -56,6 +81,22 @@ const EXTENSION_MIME_TYPES: Record<string, string> = {
   webp: 'image/webp',
 }
 
+type OpenRouterResponseCreateParamsStreaming = Omit<
+  ResponseCreateParamsStreaming,
+  'tools'
+> & {
+  tools: OpenRouterWebSearchTool[]
+}
+
+const CHAT_INSTRUCTIONS = [
+  'You are Khloei, a thoughtful and precise AI assistant.',
+  'Write responses in clear GitHub-flavored Markdown.',
+  'Use fenced code blocks with a language identifier whenever you provide code.',
+  'Web search is available. Use it when the request needs current or externally verifiable information.',
+  'Do not search for casual conversation, transformations, or requests fully answerable from the supplied conversation.',
+  'When web search is used, make sourced claims precise and preserve the generated citations.',
+].join('\n')
+
 function filename(value: string) {
   return value.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 180) || 'file'
 }
@@ -70,10 +111,31 @@ function jsonError(message: string, status: number) {
   return Response.json({ error: message }, { status })
 }
 
-export async function POST(request: Request) {
-  if (!process.env.OPENAI_API_KEY?.trim()) {
-    return jsonError('OPENAI_API_KEY is not configured on the server.', 503)
+function messageWithoutSkillCommands(message: string) {
+  return message
+    .replace(/(?:^|\s)\/computer[\s-]*use(?=\s|$)/gi, ' ')
+    .replace(/(?:^|\s)\/deep[\s-]*research(?=\s|$)/gi, ' ')
+    .trim()
+}
+
+function historyInput(history: readonly ChatHistoryMessage[]): ResponseInput {
+  return history.map((item) => ({
+    content: [{ text: item.content, type: 'input_text' }],
+    role: item.role,
+    type: 'message',
+  }))
+}
+
+function providerError(error: unknown) {
+  if (error instanceof ModelProviderConfigurationError) {
+    return jsonError(error.message, error.status)
   }
+  return null
+}
+
+export async function POST(request: Request) {
+  const refused = requireSameOriginRequest(request)
+  if (refused) return refused
 
   let formData: FormData
   try {
@@ -114,6 +176,49 @@ export async function POST(request: Request) {
       ? previousValue
       : undefined
 
+  const history = parseChatHistory(formData.get('history'))
+  if (typeof history === 'string') return jsonError(history, 400)
+
+  const modelValue = formData.get('model')
+  if (modelValue !== null && !isChatModelId(modelValue)) {
+    return jsonError('Select a supported chat model.', 400)
+  }
+  const selectedModelId = modelValue ?? DEFAULT_CHAT_MODEL_ID
+
+  const computerUse = COMPUTER_USE_COMMAND.test(message)
+  const deepResearch = DEEP_RESEARCH_COMMAND.test(message)
+  if (computerUse && deepResearch) {
+    return jsonError('Choose either Computer Use or Deep Research.', 400)
+  }
+  if (
+    (computerUse || deepResearch) &&
+    !messageWithoutSkillCommands(message) &&
+    attachments.length === 0
+  ) {
+    return jsonError('Add a question or attachment for the selected skill.', 400)
+  }
+  let provider: ModelProvider
+  try {
+    provider = deepResearch ? 'openai' : chatModelProvider(selectedModelId)
+  } catch (error) {
+    return (
+      providerError(error) ??
+      jsonError('Khloei could not select a model provider.', 500)
+    )
+  }
+
+  if (
+    provider === 'openrouter' &&
+    attachments.some(
+      (attachment) => !IMAGE_TYPES.has(attachmentMimeType(attachment)),
+    )
+  ) {
+    return jsonError(
+      'The selected OpenRouter model currently accepts text and image attachments in Khloei. Select GPT-5.6 Terra to send documents.',
+      400,
+    )
+  }
+
   const content: ResponseInputMessageContentList = [
     {
       text: message || 'Please analyze the attached content.',
@@ -139,60 +244,117 @@ export async function POST(request: Request) {
     }
   }
 
-  const deepResearch = /(?:^|\s)\/deep[\s-]*research(?:\s|$)/i.test(message)
-  const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-
-  let openAIStream
+  let client
   try {
-    openAIStream = await client.responses.create(
-      {
-        background: deepResearch,
-        input: [{ content, role: 'user' }],
-        instructions: [
-          'You are Khloei, a thoughtful and precise AI assistant.',
-          'Write responses in clear GitHub-flavored Markdown.',
-          'Use fenced code blocks with a language identifier whenever you provide code.',
-          'Web search is available. Use it whenever current or externally verifiable information would improve the answer.',
-          'When web search is used, make sourced claims precise and preserve the generated citations.',
-          deepResearch
-            ? 'The user selected Deep Research. Search broadly, compare multiple reliable sources, surface uncertainty, and produce a well-structured, evidence-rich answer.'
-            : '',
-        ]
-          .filter(Boolean)
-          .join('\n'),
-        max_output_tokens: deepResearch
-          ? DEEP_RESEARCH_MAX_OUTPUT_TOKENS
-          : 8_192,
-        model: deepResearch ? DEEP_RESEARCH_MODEL : CHAT_MODEL,
-        previous_response_id: previousResponseId,
-        reasoning: {
-          context: 'all_turns',
-          effort: deepResearch ? 'max' : 'medium',
-          summary: 'auto',
-        },
-        store: true,
-        stream: true,
-        text: { verbosity: deepResearch ? 'high' : 'medium' },
-        tool_choice: 'auto',
-        tools: [
-          {
-            search_context_size: deepResearch ? 'high' : 'medium',
-            type: 'web_search',
-          },
-        ],
-      },
-      { signal: request.signal },
-    )
+    client = createModelClient(provider)
   } catch (error) {
-    const details = openAIErrorDetails(error)
+    return (
+      providerError(error) ??
+      jsonError('Khloei could not configure the model provider.', 500)
+    )
+  }
+
+  if (computerUse) {
+    if (!process.env.COMPUTER_TOKEN?.trim()) {
+      return jsonError('COMPUTER_TOKEN is not configured on the server.', 503)
+    }
+    return createComputerStreamResponse({
+      client,
+      content,
+      history,
+      model: selectedModelId,
+      provider,
+      ...(previousResponseId && history.length === 0
+        ? { previousResponseId }
+        : {}),
+      signal: request.signal,
+    })
+  }
+
+  const input: ResponseInput = [
+    ...historyInput(history),
+    { content, role: 'user', type: 'message' },
+  ]
+  let modelStream
+  try {
+    if (provider === 'openrouter') {
+      const params: OpenRouterResponseCreateParamsStreaming = {
+        input,
+        instructions: CHAT_INSTRUCTIONS,
+        max_output_tokens: 8_192,
+        model: selectedModelId,
+        reasoning: { effort: 'medium' },
+        stream: true,
+        tool_choice: 'auto',
+        tools: [openRouterWebSearchTool()],
+      }
+      // The OpenAI SDK forwards provider extensions but does not type
+      // OpenRouter's server tools yet.
+      modelStream = await client.responses.create(
+        params as unknown as ResponseCreateParamsStreaming,
+        { signal: request.signal },
+      )
+    } else {
+      modelStream = await client.responses.create(
+        {
+          background: deepResearch,
+          input,
+          instructions: [
+            CHAT_INSTRUCTIONS,
+            deepResearch
+              ? 'The user selected Deep Research. Search broadly, compare multiple reliable sources, surface uncertainty, and produce a well-structured, evidence-rich answer.'
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          max_output_tokens: deepResearch
+            ? DEEP_RESEARCH_MAX_OUTPUT_TOKENS
+            : 8_192,
+          model: deepResearch
+            ? DEEP_RESEARCH_MODEL
+            : selectedModelId,
+          previous_response_id:
+            history.length === 0 ? previousResponseId : undefined,
+          reasoning: {
+            context: 'all_turns',
+            effort: deepResearch ? 'max' : 'medium',
+            summary: 'auto',
+          },
+          store: true,
+          stream: true,
+          text: { verbosity: deepResearch ? 'high' : 'medium' },
+          tool_choice: 'auto',
+          tools: [
+            {
+              search_context_size: deepResearch ? 'high' : 'medium',
+              type: 'web_search',
+            },
+          ],
+        },
+        { signal: request.signal },
+      )
+    }
+  } catch (error) {
+    const details =
+      provider === 'openrouter'
+        ? openRouterErrorDetails(error)
+        : openAIErrorDetails(error)
     return jsonError(details.message, details.status)
   }
 
-  return createOpenAIChatStreamResponse({
+  return createModelChatStreamResponse({
     ...(deepResearch
       ? { backgroundToken: createBackgroundResumeToken, resumable: true }
       : {}),
+    errorDetails:
+      provider === 'openrouter'
+        ? openRouterErrorDetails
+        : openAIErrorDetails,
+    headers: modelResponseHeaders(
+      provider,
+      deepResearch ? DEEP_RESEARCH_MODEL : selectedModelId,
+    ),
     signal: request.signal,
-    stream: openAIStream,
+    stream: modelStream,
   })
 }

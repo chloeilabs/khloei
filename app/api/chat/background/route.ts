@@ -5,10 +5,11 @@ import {
   isValidBackgroundResumeToken,
 } from '../../../lib/openai-background'
 import {
-  createOpenAIChatStreamResponse,
+  createModelChatStreamResponse,
   createTerminalChatResponse,
   openAIErrorDetails,
-} from '../../../lib/openai-chat-stream'
+} from '../../../lib/model-chat-stream'
+import { requireSameOriginRequest } from '../../../lib/request-origin'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -55,6 +56,9 @@ function authorized(body: BackgroundRequest) {
 }
 
 export async function POST(request: Request) {
+  const refused = requireSameOriginRequest(request)
+  if (refused) return refused
+
   const apiKey = process.env.OPENAI_API_KEY?.trim()
   if (!apiKey) {
     return jsonError('OPENAI_API_KEY is not configured on the server.', 503)
@@ -92,7 +96,7 @@ export async function POST(request: Request) {
       { signal: request.signal },
     )
 
-    return createOpenAIChatStreamResponse({
+    return createModelChatStreamResponse({
       resumable: true,
       seedResponse: current,
       signal: request.signal,
@@ -105,6 +109,9 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const refused = requireSameOriginRequest(request)
+  if (refused) return refused
+
   const apiKey = process.env.OPENAI_API_KEY?.trim()
   if (!apiKey) {
     return jsonError('OPENAI_API_KEY is not configured on the server.', 503)

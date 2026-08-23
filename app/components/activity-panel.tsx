@@ -84,12 +84,64 @@ function isWebSearchAction(
   )
 }
 
+function computerVerb(action: string) {
+  switch (action) {
+    case 'computer_navigate':
+      return { active: 'Opening', complete: 'Opened', noun: 'open' }
+    case 'computer_read':
+      return { active: 'Reading', complete: 'Read', noun: 'read' }
+    case 'computer_snapshot':
+      return { active: 'Inspecting', complete: 'Inspected', noun: 'inspect' }
+    case 'computer_click':
+      return { active: 'Clicking', complete: 'Clicked', noun: 'click' }
+    case 'computer_type':
+      return { active: 'Typing in', complete: 'Typed in', noun: 'type in' }
+    case 'computer_key':
+      return { active: 'Pressing', complete: 'Pressed', noun: 'press' }
+    case 'computer_scroll':
+      return { active: 'Scrolling', complete: 'Scrolled', noun: 'scroll' }
+    case 'computer_list_files':
+      return { active: 'Listing', complete: 'Listed', noun: 'list' }
+    case 'computer_read_file':
+      return { active: 'Reading', complete: 'Read', noun: 'read' }
+    case 'computer_write_file':
+      return { active: 'Saving', complete: 'Saved', noun: 'save' }
+    default:
+      return { active: 'Using', complete: 'Used', noun: 'use' }
+  }
+}
+
+function computerActivityLabel(activity: ChatActivity) {
+  const computer = activity.computer
+  if (!computer) return 'Using computer'
+  const verb = computerVerb(computer.action)
+  const target = computer.target ? ` ${computer.target}` : ''
+
+  if (computer.stage === 'deciding') {
+    return `Checking whether to ${verb.noun}${target}`
+  }
+  if (computer.stage === 'approved') {
+    return `Approved · ${verb.active}${target}`
+  }
+  if (computer.stage === 'refused') {
+    return `Refused to ${verb.noun}${target}`
+  }
+  if (computer.stage === 'failed') {
+    return computer.detail
+      ? `${verb.complete}${target} · ${computer.detail}`
+      : `Could not ${verb.noun}${target}`
+  }
+  return `${verb.complete}${target}`
+}
+
 function activityLabel(activity: ChatActivity) {
   if (activity.kind === 'reasoning') {
     const summary = activity.summary?.trim()
     if (summary) return formatReasoningSummary(summary)
     return isActiveStatus(activity.status) ? 'Thinking' : 'Thought'
   }
+
+  if (activity.kind === 'computer') return computerActivityLabel(activity)
 
   const action = isWebSearchAction(activity.action) ? activity.action : undefined
   if (!action) {
@@ -132,6 +184,9 @@ function activityLabel(activity: ChatActivity) {
 }
 
 function hasActionDetail(activity: ChatActivity) {
+  if (activity.kind === 'computer') {
+    return Boolean(activity.computer?.target || activity.computer?.detail)
+  }
   const action = activity.action
   if (!isWebSearchAction(action)) return false
   if (action.type === 'search') return Boolean(action.queries?.[0] ?? action.query)
@@ -141,6 +196,7 @@ function hasActionDetail(activity: ChatActivity) {
 
 function hasSpecificCollapsedDetail(activity: ChatActivity) {
   if (activity.kind === 'reasoning') return Boolean(activity.summary?.trim())
+  if (activity.kind === 'computer') return Boolean(activity.computer)
   return hasActionDetail(activity)
 }
 
@@ -151,6 +207,7 @@ function shouldShowExpandedActivity(activity: ChatActivity, isLive: boolean) {
 }
 
 function collapsedActivityLabel(activity: ChatActivity) {
+  if (activity.kind === 'computer') return computerActivityLabel(activity)
   if (activity.kind !== 'reasoning') return activityLabel(activity)
 
   const summary = activity.summary?.trim()
@@ -206,10 +263,13 @@ function panelOrbState(activities: ChatActivity[], isLive: boolean): OrbState {
   const hasSearch = activities.some(
     (activity) => activity.kind === 'web_search',
   )
+  const hasComputer = activities.some(
+    (activity) => activity.kind === 'computer',
+  )
 
   if (isLive && hasActiveSearch) return 'searching'
   if (isLive && hasActiveReasoning) return 'composing'
-  return hasSearch ? 'searching' : 'composing'
+  return hasSearch && !hasComputer ? 'searching' : 'composing'
 }
 
 export const ActivityPanel = memo(function ActivityPanel({

@@ -16,6 +16,9 @@ export function upsertChatActivity(
   if (next.summary === undefined && previous.summary !== undefined) {
     merged.summary = previous.summary
   }
+  if (next.computer === undefined && previous.computer !== undefined) {
+    merged.computer = previous.computer
+  }
 
   return [...current.slice(0, index), merged, ...current.slice(index + 1)]
 }

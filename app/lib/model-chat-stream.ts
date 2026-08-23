@@ -20,17 +20,19 @@ type OpenAIUrlCitation = Extract<
   { type: 'url_citation' }
 >
 
-type ReasoningParts = Map<string, Map<number, string>>
+export type ReasoningParts = Map<string, Map<number, string>>
 
 type OpenAIChatStreamOptions = {
   backgroundToken?: (responseId: string) => string
+  errorDetails?: (error: unknown) => { message: string; status: number }
+  headers?: HeadersInit
   resumable?: boolean
   seedResponse?: OpenAIResponse
   signal: AbortSignal
   stream: AsyncIterable<ResponseStreamEvent>
 }
 
-const STREAM_HEADERS = {
+export const STREAM_HEADERS = {
   'Cache-Control': 'no-cache, no-store, no-transform',
   'Content-Type': 'application/x-ndjson; charset=utf-8',
   'X-Accel-Buffering': 'no',
@@ -112,7 +114,8 @@ function outputItemActivity(
 
   const fallback = phase === 'added' ? 'in_progress' : 'completed'
   if (value.type === 'reasoning') {
-    const summary = reasoningSummary(value.summary)
+    const summary =
+      reasoningSummary(value.summary) ?? reasoningSummary(value.content)
     return {
       id: value.id,
       kind: 'reasoning',
@@ -120,7 +123,10 @@ function outputItemActivity(
       ...(summary ? { summary } : {}),
     }
   }
-  if (value.type === 'web_search_call') {
+  if (
+    value.type === 'web_search_call' ||
+    value.type === 'openrouter:web_search'
+  ) {
     const action = webSearchAction(value.action)
     return {
       id: value.id,
@@ -162,7 +168,7 @@ function lifecycleActivity(value: unknown): ChatActivity | undefined {
   }
 }
 
-function seedReasoningParts(response?: OpenAIResponse): ReasoningParts {
+export function seedReasoningParts(response?: OpenAIResponse): ReasoningParts {
   const seeded: ReasoningParts = new Map()
   if (!response) return seeded
 
@@ -177,7 +183,7 @@ function seedReasoningParts(response?: OpenAIResponse): ReasoningParts {
   return seeded
 }
 
-function streamActivity(
+export function streamActivity(
   value: unknown,
   reasoningParts: ReasoningParts,
 ): ChatActivity | undefined {
@@ -195,7 +201,9 @@ function streamActivity(
 
   if (
     value.type === 'response.reasoning_summary_text.delta' ||
-    value.type === 'response.reasoning_summary_text.done'
+    value.type === 'response.reasoning_summary_text.done' ||
+    value.type === 'response.reasoning_text.delta' ||
+    value.type === 'response.reasoning_text.done'
   ) {
     if (typeof value.item_id !== 'string') return undefined
     const summaryIndex =
@@ -250,12 +258,18 @@ function collectCitations(
     const url = safeHttpUrl(citation.url)
     if (!url) continue
 
-    normalized.push({
-      endIndex: citation.end_index,
-      startIndex: citation.start_index,
-      title: citation.title,
-      url,
-    })
+    const anchored =
+      citation.start_index >= 0 &&
+      citation.end_index > citation.start_index &&
+      citation.end_index <= text.length
+    if (anchored) {
+      normalized.push({
+        endIndex: citation.end_index,
+        startIndex: citation.start_index,
+        title: citation.title,
+        url,
+      })
+    }
 
     if (sourceUrls.has(url)) continue
     sourceUrls.add(url)
@@ -303,43 +317,74 @@ function incompleteResponseMessage(response: OpenAIResponse) {
   return 'The response stopped with an incomplete status before it could finish.'
 }
 
-export function openAIErrorDetails(error: unknown) {
+export function modelAPIErrorDetails(
+  error: unknown,
+  provider: 'OpenAI' | 'OpenRouter',
+) {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? String(error.code)
+      : undefined
   const status =
     typeof error === 'object' && error !== null && 'status' in error
       ? Number(error.status)
       : 500
 
+  if (code === 'billing_not_active') {
+    return {
+      message: `${provider} billing is not active for this API key.`,
+      status: 402,
+    }
+  }
+
   if (status === 401 || status === 403) {
     return {
-      message: 'The OpenAI API key is invalid or does not have access to this model.',
+      message: `The ${provider} API key is invalid or does not have access to this model.`,
+      status,
+    }
+  }
+  if (status === 402 && provider === 'OpenRouter') {
+    return {
+      message: 'The OpenRouter account does not have enough credits for this request.',
       status,
     }
   }
   if (status === 404) {
     return {
-      message: 'This background response is no longer available.',
+      message:
+        provider === 'OpenRouter'
+          ? 'The requested OpenRouter model is not available.'
+          : 'This background response is no longer available.',
       status,
     }
   }
   if (status === 429) {
     return {
-      message: 'OpenAI is rate-limiting this project. Please try again shortly.',
+      message: `${provider} is rate-limiting this project. Please try again shortly.`,
       status,
     }
   }
   if (status === 400) {
     return {
-      message: 'OpenAI could not process this message or attachment.',
+      message: `${provider} could not process this message or attachment.`,
       status,
     }
   }
   if (status >= 500 && status < 600) {
     return {
-      message: 'OpenAI is temporarily unavailable. Please try again.',
+      message: `${provider} is temporarily unavailable. Please try again.`,
       status: 502,
     }
   }
   return { message: 'Khloei could not complete that response.', status: 500 }
+}
+
+export function openAIErrorDetails(error: unknown) {
+  return modelAPIErrorDetails(error, 'OpenAI')
+}
+
+export function openRouterErrorDetails(error: unknown) {
+  return modelAPIErrorDetails(error, 'OpenRouter')
 }
 
 function completedActivities(response: OpenAIResponse): ChatStreamEvent[] {
@@ -409,8 +454,10 @@ export function createTerminalChatResponse(response: OpenAIResponse) {
   return new Response(body, { headers: STREAM_HEADERS })
 }
 
-export function createOpenAIChatStreamResponse({
+export function createModelChatStreamResponse({
   backgroundToken,
+  errorDetails = openAIErrorDetails,
+  headers,
   resumable = false,
   seedResponse,
   signal,
@@ -495,7 +542,7 @@ export function createOpenAIChatStreamResponse({
           send(
             resumable
               ? { type: 'reconnect' }
-              : { message: openAIErrorDetails(error).message, type: 'error' },
+              : { message: errorDetails(error).message, type: 'error' },
           )
         }
         close()
@@ -503,5 +550,7 @@ export function createOpenAIChatStreamResponse({
     },
   })
 
-  return new Response(body, { headers: STREAM_HEADERS })
+  return new Response(body, {
+    headers: { ...STREAM_HEADERS, ...headers },
+  })
 }

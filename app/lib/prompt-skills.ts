@@ -1,5 +1,10 @@
 export const PROMPT_SKILLS = [
   {
+    aliases: ['computer', 'computer use', 'computer-use', 'browser'],
+    id: 'computer-use',
+    name: 'Computer Use',
+  },
+  {
     aliases: ['deep research', 'deep-research', 'deep_research'],
     id: 'deep-research',
     name: 'Deep Research',

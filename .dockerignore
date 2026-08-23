@@ -1,0 +1,8 @@
+.git
+.next
+.khloei
+.env
+.env.*
+node_modules
+services/computer/node_modules
+*.log

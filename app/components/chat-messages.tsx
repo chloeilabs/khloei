@@ -37,6 +37,9 @@ export const ChatMessages = memo(function ChatMessages({
           >
             {turn.map((message) => (
               <ChatMessage
+                computerInteractive={
+                  isLastTurn && message.role === 'assistant'
+                }
                 key={message.id}
                 message={message}
                 onFollowUpQuestionClick={onFollowUpQuestionClick}
