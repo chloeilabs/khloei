@@ -16,7 +16,9 @@ at OpenAI.
 Computer Use gives Khloei a persistent Playwright browser and a confined file
 workspace. Browser and file tools are selected by the model, but every tool call
 passes through a server-side policy gateway and an append-only audit log before
-it can run. Completion or failure is recorded afterward.
+it can run. Completion or failure is recorded afterward. An optional durable
+Agents SDK worker moves the long-running model loop outside Vercel, checkpoints
+it in SQLite, and reconnects the chat after reloads or transient disconnects.
 
 ## Getting Started
 
@@ -24,6 +26,7 @@ Install both runtimes:
 
 ```bash
 npm install
+npm run agent:install
 npm run computer:install
 ```
 
@@ -36,6 +39,14 @@ COMPUTER_TOKEN=replace_with_a_long_random_value
 KHLOEI_COMPUTER_URL=http://127.0.0.1:4100
 KHLOEI_COMPUTER_PUBLIC_URL=http://127.0.0.1:4100
 KHLOEI_COMPUTER_BOT_ID=khloei
+KHLOEI_AGENT_WORKER_TOKEN=replace_with_another_long_random_value
+KHLOEI_AGENT_WORKER_URL=http://127.0.0.1:4200
+KHLOEI_APP_URL=http://127.0.0.1:3000
+AGENT_WORKER_DB_PATH=.khloei/agent-worker/tasks.sqlite
+AGENT_WORKER_LEASE_MS=30000
+AGENT_WORKER_HEARTBEAT_MS=10000
+AGENT_WORKER_MAINTENANCE_MS=5000
+AGENT_WORKER_RETENTION_DAYS=30
 ```
 
 The model selector determines the provider for normal chat, follow-up
@@ -56,10 +67,21 @@ public WebSocket address in deployment; it defaults to the server address. A
 Vercel deployment cannot reach Railway's private network, so both values use the
 Railway HTTPS domain in that topology.
 
-Start the computer and app in separate terminals:
+`KHLOEI_AGENT_WORKER_TOKEN` authenticates the app and durable worker in both
+directions and signs browser resume tokens. Generate it independently with
+`openssl rand -hex 32`; it falls back to `COMPUTER_TOKEN` only for
+backward-compatible local setup. `KHLOEI_AGENT_WORKER_URL` opts Computer Use
+into durable execution. Without it, Khloei keeps the direct request-bound path.
+The worker uses `KHLOEI_APP_URL` for short authenticated action callbacks.
+
+Start the computer, durable worker, and app in separate terminals:
 
 ```bash
 npm run computer:dev
+```
+
+```bash
+npm run agent:dev
 ```
 
 ```bash
@@ -76,6 +98,31 @@ files, and audit storage. The OpenAI Agents SDK selects Khloei's published
 browser and file tools, while the Next.js gateway supplies policy decisions,
 target protection, the audit chain, streaming activity, and live browser
 frames.
+
+When `KHLOEI_AGENT_WORKER_URL` is configured, the single-replica worker owns
+the Agents SDK run loop instead of a Vercel function. It stores the serialized
+`RunState`, event cursor, gateway state, human-approval interruption, and an
+exactly-once action ledger in SQLite. A browser reload reconnects by task id and
+cursor. Checkpoints carry an explicit envelope version for the Agents SDK and
+Khloei's agent graph; incompatible deployments fail closed rather than resuming
+against changed tools. The worker renews ownership leases while a task runs and
+only reclaims expired work. If a lease expires after an action was dispatched
+but before its result was committed, Khloei records the outcome as ambiguous,
+does not replay the action, and inspects the current computer state before
+continuing.
+
+The default lease is 30 seconds with a 10-second heartbeat and a 5-second stale
+task sweep. `AGENT_WORKER_RETENTION_DAYS` removes completed, failed, and
+cancelled task data after 30 days; set it to `0` to disable automatic retention.
+Active and human-waiting tasks are never removed. Run `bun run eval:computer`
+to exercise the real Khloei agent graph against side-effect-free safety
+fixtures; local reports are written under `evals/results/`.
+
+Human help and secret-entry requests use persisted Agents SDK interruptions.
+The worker can remain idle while a person takes control, survives a restart
+during that wait, and resumes the same run only after the computer service
+reports that control was handed back. Stop and New Chat request durable
+cancellation; a pending takeover is released before the task becomes terminal.
 
 Only the newest computer card opens a live viewer. The browser receives a
 single-use, short-lived viewer token bound to the Khloei app origin; the root
@@ -142,6 +189,29 @@ The equivalent local build is:
 docker build -f services/computer/Dockerfile -t khloei-computer .
 ```
 
+The [`agent-worker-image.yml`](./.github/workflows/agent-worker-image.yml)
+workflow similarly publishes `khloei-agent-worker`. Its local build is:
+
+```bash
+docker build -f services/agent-worker/Dockerfile -t khloei-agent-worker .
+```
+
+Run the agent worker as one Railway replica with a volume mounted at `/data`
+and `AGENT_WORKER_DB_PATH=/data/tasks.sqlite`. Configure its model keys, a
+dedicated `KHLOEI_AGENT_WORKER_TOKEN`, and
+`KHLOEI_APP_URL=https://your-khloei-app.example`. Configure the same worker
+token plus `KHLOEI_AGENT_WORKER_URL=https://your-worker.example` on Vercel.
+Production refuses to fall back to `COMPUTER_TOKEN`; sharing the computer's
+root credential with the worker is supported only for local development.
+The worker needs outbound HTTPS access to both the app and model provider; only
+Vercel needs its authenticated task API.
+
+If Vercel Deployment Protection covers `KHLOEI_APP_URL`, also configure the
+project's Protection Bypass for Automation secret as
+`VERCEL_AUTOMATION_BYPASS_SECRET` on the Railway worker. Khloei sends it only
+as Vercel's recommended `x-vercel-protection-bypass` callback header; the
+independent worker token still authenticates the application route itself.
+
 Run it with `COMPUTER_TOKEN` and durable storage. Railway supports one volume per
 service, so mount it at `/data` and set:
 
@@ -157,6 +227,11 @@ the `RAILWAY_TOKEN` GitHub Actions secret. Railway should use
 `ghcr.io/chloeilabs/khloei-computer:latest` as its image source, expose port
 4100, and require `/health` to pass before a deployment becomes active.
 
+Enable the agent-worker workflow's Railway step separately with
+`RAILWAY_AGENT_WORKER_DEPLOY_ENABLED=true`. Railway should use
+`ghcr.io/chloeilabs/khloei-agent-worker:latest`, expose port 4200, mount its
+volume at `/data`, and require `/health` to pass.
+
 Point both `KHLOEI_COMPUTER_URL` and `KHLOEI_COMPUTER_PUBLIC_URL` at the
 Railway HTTPS domain when the Next.js app runs on Vercel. Viewer URLs contain
 only one-use scoped tokens, never `COMPUTER_TOKEN`; all other computer endpoints
@@ -165,6 +240,13 @@ than Vercel's ephemeral function filesystem. If the computer service can share
 a private network with the app, keep its root endpoint private and expose only
 the viewer stream through a TLS proxy.
 
-The vendored service contains a shell endpoint for its container use case.
-Khloei does not publish a shell tool to the model, and its default policy denies
-the `run_command` intent. Do not expose the service directly to browsers.
+The computer exposes browser and workspace operations only; it has no shell
+endpoint. Every accessibility snapshot carries the current computer-process
+session id, so a durable task cannot reuse element references after the
+computer restarts and resets its numeric snapshot counter.
+
+Tool completion, gateway state, user-visible activity, and the pre-return agent
+checkpoint are committed together in one SQLite transaction. A restart after
+that boundary replays the stored tool result without repeating the external
+action; a restart before the boundary marks the action ambiguous and requires a
+fresh inspection instead of guessing.

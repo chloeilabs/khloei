@@ -17,7 +17,12 @@ import {
   isChatModelId,
 } from '../../lib/chat-models'
 import { DEEP_RESEARCH_MODEL } from '../../lib/chat-config'
+import {
+  isComputerWorkerConfigured,
+  isComputerWorkerRequired,
+} from '../../lib/computer/worker-auth'
 import { createComputerStreamResponse } from '../../lib/model-computer-stream'
+import { createComputerTaskResponse } from '../../lib/model-computer-task'
 import {
   chatModelProvider,
   createModelClient,
@@ -244,6 +249,39 @@ export async function POST(request: Request) {
     }
   }
 
+  if (computerUse) {
+    if (!process.env.COMPUTER_TOKEN?.trim()) {
+      return jsonError('COMPUTER_TOKEN is not configured on the server.', 503)
+    }
+    if (isComputerWorkerConfigured()) {
+      try {
+        return await createComputerTaskResponse({
+          content,
+          history,
+          model: selectedModelId,
+          provider,
+          ...(previousResponseId && history.length === 0
+            ? { previousResponseId }
+            : {}),
+          signal: request.signal,
+        })
+      } catch (error) {
+        return jsonError(
+          error instanceof Error
+            ? error.message
+            : 'Khloei could not start the durable computer task.',
+          503,
+        )
+      }
+    }
+    if (isComputerWorkerRequired()) {
+      return jsonError(
+        'Khloei\'s durable computer worker is not configured. Computer Use is unavailable until the worker connection is restored.',
+        503,
+      )
+    }
+  }
+
   let client
   try {
     client = createModelClient(provider)
@@ -255,9 +293,6 @@ export async function POST(request: Request) {
   }
 
   if (computerUse) {
-    if (!process.env.COMPUTER_TOKEN?.trim()) {
-      return jsonError('COMPUTER_TOKEN is not configured on the server.', 503)
-    }
     return createComputerStreamResponse({
       client,
       content,

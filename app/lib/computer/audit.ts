@@ -23,7 +23,10 @@ export type ComputerAuditEvent = {
     | 'computer.help_requested'
     | 'computer.control_taken'
     | 'computer.control_released'
+    | 'computer.help_completed'
+    | 'computer.assistance_cancelled'
     | 'computer.secret_requested'
+    | 'computer.secret_completed'
     | 'computer.secret_supplied'
   hash: string
   id: string

@@ -4,13 +4,22 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "agent:dev": "bun --env-file=.env.local services/agent-worker/src/local.ts",
+    "agent:install": "bun install --cwd services/agent-worker --frozen-lockfile",
+    "agent:test": "bun run --cwd services/agent-worker test",
+    "agent:typecheck": "bun run --cwd services/agent-worker typecheck",
     "computer:dev": "bun --env-file=.env.local services/computer/src/local.ts",
     "computer:install": "bun install --cwd services/computer --frozen-lockfile",
     "computer:test": "bun run --cwd services/computer test",
     "computer:typecheck": "bun run --cwd services/computer typecheck",
+    "check": "npm run lint && npm run typecheck && npm test && npm run build",
+    "eval:computer": "bun --env-file=.env.local evals/computer-agent/run.ts",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "npm run test:app && npm run agent:test && npm run computer:test",
+    "test:app": "bun test app/lib/computer/*.test.ts",
+    "typecheck": "next typegen && tsc --noEmit && npm run agent:typecheck && npm run computer:typecheck"
   },
   "dependencies": {
     "@openai/agents": "^0.17.0",
@@ -32,6 +41,7 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/bun": "^1.3.3",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

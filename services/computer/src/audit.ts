@@ -9,7 +9,10 @@ export const COMPUTER_AUDIT_EVENT_TYPES = [
   "computer.help_requested",
   "computer.control_taken",
   "computer.control_released",
+  "computer.help_completed",
+  "computer.assistance_cancelled",
   "computer.secret_requested",
+  "computer.secret_completed",
   "computer.secret_supplied",
 ] as const;
 

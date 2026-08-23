@@ -154,6 +154,11 @@ export type SnapshotElement = {
 
 export type SnapshotResult = {
   /**
+   * Process-scoped computer generation. A snapshot from an earlier container
+   * must never become valid again when the numeric snapshot counter restarts.
+   */
+  computerSessionId: string;
+  /**
    * Which snapshot these refs belong to. Must be sent back with every action.
    *
    * This field makes refs from superseded snapshots refusals instead of actions.

@@ -17,7 +17,7 @@ type ViewerSessionOptions = {
 /**
  * One-use, short-lived credentials for the browser-facing live screen.
  *
- * The computer's root token can drive files, the shell, and every browser profile, so it must never
+ * The computer's root token can drive files and every browser profile, so it must never
  * reach React. A viewer credential is deliberately much smaller: it opens one WebSocket for one Bot,
  * from the exact app origin that requested it, and disappears as soon as that upgrade succeeds.
  */

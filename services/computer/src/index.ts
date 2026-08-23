@@ -29,7 +29,11 @@ import {
   type Screencast,
   startScreencast,
 } from "./screencast";
-import { createShell } from "./shell";
+import {
+  assertComputerSession,
+  createComputerSessionId,
+  StaleSnapshotError,
+} from "./snapshot-session";
 import {
   createWorkspace,
   WorkspaceFileError,
@@ -104,6 +108,7 @@ const ACTION_TIMEOUT_MS = Number.parseInt(
   process.env.ACTION_TIMEOUT_MS ?? "10000",
   10,
 );
+const COMPUTER_SESSION_ID = createComputerSessionId();
 
 /**
  * How much page text a navigation hands back.
@@ -215,7 +220,6 @@ const auditLog = createComputerAuditLog(dataDirectories.audit);
 await auditLog.ready();
 // Rooted in the same workspace the file tools use, so a command and a written file see one
 // directory rather than two.
-const shell = createShell(dataDirectories.workspace);
 
 /**
  * The id normally arrives as a header on every request. This is the fallback for a caller that has no
@@ -275,6 +279,7 @@ async function snapshotPage(
   session: BotSession,
   target: Page,
 ): Promise<{
+  computerSessionId: string;
   snapshotId: number;
   url: string;
   title: string;
@@ -284,6 +289,7 @@ async function snapshotPage(
   session.snapshotId += 1;
   const yaml = await target.ariaSnapshot({ mode: "ai" });
   return {
+    computerSessionId: COMPUTER_SESSION_ID,
     snapshotId: session.snapshotId,
     url: target.url(),
     title: await target.title(),
@@ -302,7 +308,9 @@ function locateRef(
   target: Page,
   ref: string,
   expectedSnapshotId: number | undefined,
+  expectedComputerSessionId?: string,
 ) {
+  assertComputerSession(COMPUTER_SESSION_ID, expectedComputerSessionId);
   if (
     expectedSnapshotId !== undefined &&
     expectedSnapshotId !== session.snapshotId
@@ -331,21 +339,21 @@ async function resolveRef(
   target: Page,
   ref: string,
   expectedSnapshotId: number | undefined,
+  expectedComputerSessionId?: string,
 ) {
-  const locator = locateRef(session, target, ref, expectedSnapshotId);
+  const locator = locateRef(
+    session,
+    target,
+    ref,
+    expectedSnapshotId,
+    expectedComputerSessionId,
+  );
   if ((await locator.count()) === 0) {
     throw new StaleSnapshotError(
       `Nothing on this page has the ref ${ref}. Take a new snapshot and use the refs it returns.`,
     );
   }
   return locator;
-}
-
-class StaleSnapshotError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "StaleSnapshotError";
-  }
 }
 
 function json(body: unknown, status = 200): Response {
@@ -681,7 +689,8 @@ serve<StreamData>({
       return json(control);
     }
 
-    // The Bot asking for one value it must not be told. It has already focused the field.
+    // The Bot asking for one value it must not be told. It names a field from its fresh snapshot;
+    // the secret-entry endpoint focuses that exact ref immediately before filling it.
     if (url.pathname === "/control/secret" && request.method === "POST") {
       const body = (await request.json().catch(() => null)) as {
         label?: unknown;
@@ -874,6 +883,7 @@ serve<StreamData>({
       const [profile] = profiles.summary([botId]);
       return json({
         status: "ok",
+        computerSessionId: COMPUTER_SESSION_ID,
         // `browser` kept as it was: it is in the published contract and start.sh reads it.
         browser: profile?.running ?? false,
         profile,
@@ -1029,39 +1039,6 @@ serve<StreamData>({
       }
     }
 
-    /*
-     * A command on this computer.
-     *
-     * Nothing here decides whether it may run: the gateway already asked the deployment's policy and
-     * wrote the audit row before this was called. Refusing again here would be a second, quieter
-     * policy nobody configured.
-     */
-    if (url.pathname === "/exec" && request.method === "POST") {
-      const body = (await request.json().catch(() => null)) as {
-        command?: unknown;
-        timeoutMs?: unknown;
-      } | null;
-      if (typeof body?.command !== "string" || !body.command.trim()) {
-        return json({ error: "A command is required." }, 400);
-      }
-      try {
-        return json(
-          await shell.run({
-            command: body.command,
-            ...(typeof body.timeoutMs === "number"
-              ? { timeoutMs: body.timeoutMs }
-              : {}),
-            signal: request.signal,
-          }),
-        );
-      } catch (error) {
-        return json(
-          { error: describe(error, "The command could not be run.") },
-          500,
-        );
-      }
-    }
-
     if (url.pathname === "/files/write" && request.method === "POST") {
       const body = (await request.json().catch(() => null)) as {
         path?: unknown;
@@ -1182,6 +1159,7 @@ serve<StreamData>({
 });
 
 type ActionBody = {
+  computerSessionId?: unknown;
   ref?: unknown;
   snapshotId?: unknown;
   text?: unknown;
@@ -1288,11 +1266,23 @@ async function performAction(
   const acting = { timeout: ACTION_TIMEOUT_MS, ...(signal ? { signal } : {}) };
   const expected =
     typeof body.snapshotId === "number" ? body.snapshotId : undefined;
+  const expectedComputerSessionId =
+    typeof body.computerSessionId === "string"
+      ? body.computerSessionId
+      : undefined;
   const ref = typeof body.ref === "string" && body.ref ? body.ref : undefined;
 
   if (action === "/click") {
     if (!ref) throw new Error("A click needs the ref of an element to click.");
-    await (await resolveRef(session, target, ref, expected)).click(acting);
+    await (
+      await resolveRef(
+        session,
+        target,
+        ref,
+        expected,
+        expectedComputerSessionId,
+      )
+    ).click(acting);
     return { action: "click", ref, url: target.url() };
   }
 
@@ -1301,7 +1291,13 @@ async function performAction(
     if (typeof body.text !== "string") {
       throw new Error("Typing needs the text to enter.");
     }
-    const field = await resolveRef(session, target, ref, expected);
+    const field = await resolveRef(
+      session,
+      target,
+      ref,
+      expected,
+      expectedComputerSessionId,
+    );
     // `fill` rather than keystrokes: it clears the field first, which is what "put this value in
     // this box" means. Typing into a field a previous attempt half-filled otherwise appends, and the
     // form ends up with "AlicAlice" in it.
@@ -1326,7 +1322,15 @@ async function performAction(
       throw new Error("A key press needs a key name, such as Enter or Tab.");
     }
     if (ref) {
-      await (await resolveRef(session, target, ref, expected)).press(
+      await (
+        await resolveRef(
+          session,
+          target,
+          ref,
+          expected,
+          expectedComputerSessionId,
+        )
+      ).press(
         body.key,
         acting,
       );

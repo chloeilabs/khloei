@@ -1,4 +1,4 @@
-name: Build computer image
+name: Build agent worker image
 
 on:
   workflow_dispatch:
@@ -6,19 +6,20 @@ on:
     branches:
       - main
     paths:
-      - services/computer/**
-      - .github/workflows/computer-image.yml
+      - shared/**
+      - services/agent-worker/**
+      - .github/workflows/agent-worker-image.yml
 
 permissions:
   contents: read
   packages: write
 
 concurrency:
-  group: khloei-computer-image
+  group: khloei-agent-worker-image
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/khloei-computer
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/khloei-agent-worker
 
 jobs:
   verify:
@@ -27,42 +28,50 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          cache: npm
+          node-version: 24.15.0
+
       - name: Set up Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.11
 
+      - name: Install shared application dependencies
+        run: npm ci --ignore-scripts
+
       - name: Install dependencies
-        run: bun install --cwd services/computer --frozen-lockfile
+        run: bun install --cwd services/agent-worker --frozen-lockfile
 
       - name: Typecheck
-        run: bun run --cwd services/computer typecheck
+        run: bun run --cwd services/agent-worker typecheck
 
       - name: Test
-        run: bun run --cwd services/computer test
+        run: bun run --cwd services/agent-worker test
 
       - name: Build smoke image
-        run: docker build --file services/computer/Dockerfile --tag khloei-computer:smoke .
+        run: docker build --file services/agent-worker/Dockerfile --tag khloei-agent-worker:smoke .
 
       - name: Boot and verify smoke image
         run: |
-          docker run --detach --name khloei-computer-smoke --publish 4100:4100 --env COMPUTER_TOKEN=ci-computer-token khloei-computer:smoke
-          for attempt in {1..60}; do
-            if curl --fail --silent http://127.0.0.1:4100/health | jq --exit-status '.status == "ok" and (.computerSessionId | startswith("computer_"))' >/dev/null; then
+          docker run --detach --name khloei-agent-worker-smoke --publish 4200:4200 --env KHLOEI_AGENT_WORKER_TOKEN=ci-worker-token --env KHLOEI_APP_URL=http://127.0.0.1:3000 khloei-agent-worker:smoke
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4200/health | jq --exit-status '.durable == true and .status == "ok"' >/dev/null; then
               break
             fi
-            if [ "$attempt" -eq 60 ]; then
-              docker logs khloei-computer-smoke
+            if [ "$attempt" -eq 30 ]; then
+              docker logs khloei-agent-worker-smoke
               exit 1
             fi
             sleep 1
           done
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:4100/control)" = "401"
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Authorization: Bearer ci-computer-token' --request POST http://127.0.0.1:4100/exec)" = "404"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --request POST http://127.0.0.1:4200/v1/tasks)" = "401"
 
       - name: Stop smoke image
         if: always()
-        run: docker rm --force khloei-computer-smoke >/dev/null 2>&1 || true
+        run: docker rm --force khloei-agent-worker-smoke >/dev/null 2>&1 || true
 
   build:
     needs: verify
@@ -81,11 +90,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and publish computer image
+      - name: Build and publish agent worker image
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: services/computer/Dockerfile
+          file: services/agent-worker/Dockerfile
           platforms: linux/amd64
           push: true
           provenance: true
@@ -97,17 +106,17 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Install Railway CLI
-        if: vars.RAILWAY_DEPLOY_ENABLED == 'true'
+        if: vars.RAILWAY_AGENT_WORKER_DEPLOY_ENABLED == 'true'
         run: npm install --global @railway/cli@5.43.1
 
       - name: Deploy the published image to Railway
-        if: vars.RAILWAY_DEPLOY_ENABLED == 'true'
+        if: vars.RAILWAY_AGENT_WORKER_DEPLOY_ENABLED == 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: >-
           railway redeploy
           --project 791f0f7b-cdb6-41db-b54e-7b3743300d74
           --environment production
-          --service khloei-computer
+          --service khloei-agent-worker
           --from-source
           --yes

@@ -69,9 +69,15 @@ export type ComputerGatewayProgress = {
 }
 
 type GatewayOptions = {
+  initialState?: ComputerGatewayState
   onProgress?: (progress: ComputerGatewayProgress) => void
   sessionId: string
   signal?: AbortSignal
+}
+
+export type ComputerGatewayState = {
+  currentPageUrl: string
+  snapshot?: SnapshotResult
 }
 
 type GovernedSubject = {
@@ -347,8 +353,15 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
     allowPrivateHosts:
       process.env.KHLOEI_COMPUTER_ALLOW_PRIVATE_HOSTS === 'true',
   })
-  let currentPageUrl = ''
-  let snapshot: SnapshotResult | undefined
+  let currentPageUrl = options.initialState?.currentPageUrl ?? ''
+  let snapshot = options.initialState?.snapshot
+  if (
+    snapshot &&
+    (typeof snapshot.computerSessionId !== 'string' ||
+      !snapshot.computerSessionId)
+  ) {
+    snapshot = undefined
+  }
 
   const progress = (event: ComputerGatewayProgress) => {
     try {
@@ -483,6 +496,11 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
   const post = <T>(path: string, body: unknown) =>
     transport.post<T>(baseUrl, botId, path, body, options.signal)
 
+  const withSnapshotSession = <T extends object>(input: T) =>
+    snapshot?.computerSessionId
+      ? { ...input, computerSessionId: snapshot.computerSessionId }
+      : input
+
   async function waitForPerson(
     done: (state: ControlState) => boolean,
   ): Promise<'answered' | 'cancelled' | 'gave_up'> {
@@ -496,6 +514,148 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
       )
     }
     return 'gave_up'
+  }
+
+  const beginHelp = async (reason: string, activityId: string) => {
+    const state = await post<ControlState>('/control/request', { reason })
+    const event = await recordComputerAuditEvent({
+      action: 'computer_request_help',
+      actor,
+      bot: botId,
+      eventType: 'computer.help_requested',
+      outcome: { requested: state.requested },
+      sessionId: options.sessionId,
+      target: { reason },
+    })
+    progress({
+      action: 'computer_request_help',
+      activityId,
+      auditEventId: event.id,
+      stage: 'approved',
+      target: 'human assistance',
+    })
+    return state
+  }
+
+  const completeHelp = async (
+    reason: string,
+    activityId: string,
+    assistance: 'answered' | 'cancelled' | 'gave_up',
+  ) => {
+    const event = await recordComputerAuditEvent({
+      action: 'computer_request_help',
+      actor,
+      bot: botId,
+      eventType: 'computer.help_completed',
+      outcome: { assistance },
+      sessionId: options.sessionId,
+      target: { reason },
+    })
+    progress({
+      action: 'computer_request_help',
+      activityId,
+      auditEventId: event.id,
+      stage: 'completed',
+      target: 'human assistance',
+    })
+    return {
+      assistance,
+      requested: assistance !== 'answered',
+      message:
+        assistance === 'answered'
+          ? 'The person finished and handed control back. Take a fresh snapshot because the page may have changed.'
+          : assistance === 'cancelled'
+            ? 'The request was cancelled.'
+            : 'Nobody took control. Explain what help is still needed instead of trying the blocked step yourself.',
+    }
+  }
+
+  const beginSecret = async (input: SecretRequest, activityId: string) => {
+    const state = await post<ControlState>('/control/secret', input)
+    const event = await recordComputerAuditEvent({
+      action: 'computer_request_secret',
+      actor,
+      bot: botId,
+      eventType: 'computer.secret_requested',
+      outcome: { requested: Boolean(state.secretWanted) },
+      sessionId: options.sessionId,
+      target: {
+        label: input.label,
+        ref: input.ref,
+        snapshotId: input.snapshotId,
+      },
+    })
+    progress({
+      action: 'computer_request_secret',
+      activityId,
+      auditEventId: event.id,
+      stage: 'approved',
+      target: input.label,
+    })
+    return state
+  }
+
+  const completeSecret = async (
+    input: SecretRequest,
+    activityId: string,
+    assistance: 'answered' | 'cancelled' | 'gave_up',
+  ) => {
+    const event = await recordComputerAuditEvent({
+      action: 'computer_request_secret',
+      actor,
+      bot: botId,
+      eventType: 'computer.secret_completed',
+      outcome: { assistance },
+      sessionId: options.sessionId,
+      target: {
+        label: input.label,
+        ref: input.ref,
+        snapshotId: input.snapshotId,
+      },
+    })
+    progress({
+      action: 'computer_request_secret',
+      activityId,
+      auditEventId: event.id,
+      stage: 'completed',
+      target: input.label,
+    })
+    return {
+      assistance,
+      requested: assistance !== 'answered',
+      message:
+        assistance === 'answered'
+          ? `The person entered ${input.label} directly into the field without revealing it. Submit separately if needed.`
+          : assistance === 'cancelled'
+            ? 'The secret request was cancelled.'
+            : `Nobody entered ${input.label}. Do not ask for the value another way.`,
+    }
+  }
+
+  const cancelAssistance = async (
+    action: 'computer_request_help' | 'computer_request_secret',
+    activityId: string,
+    target: string,
+  ) => {
+    const state = await post<ControlState>('/control/release', {})
+    const event = await recordComputerAuditEvent({
+      action,
+      actor,
+      bot: botId,
+      eventType: 'computer.assistance_cancelled',
+      outcome: { cancelled: true },
+      sessionId: options.sessionId,
+      target: { label: target },
+    })
+    progress({
+      action,
+      activityId,
+      auditEventId: event.id,
+      detail: 'The computer task was cancelled.',
+      stage: 'failed',
+      target,
+    })
+    return state
   }
 
   return {
@@ -535,86 +695,36 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
     },
 
     async requestHelp(reason: string, activityId: string) {
-      const state = await post<ControlState>('/control/request', { reason })
-      const event = await recordComputerAuditEvent({
-        action: 'computer_request_help',
-        actor,
-        bot: botId,
-        eventType: 'computer.help_requested',
-        outcome: { requested: state.requested },
-        sessionId: options.sessionId,
-        target: { reason },
-      })
-      progress({
-        action: 'computer_request_help',
-        activityId,
-        auditEventId: event.id,
-        stage: 'approved',
-        target: 'human assistance',
-      })
+      await beginHelp(reason, activityId)
       const assistance = await waitForPerson(
         (current) => current.holder === 'bot' && !current.requested,
       )
-      progress({
-        action: 'computer_request_help',
-        activityId,
-        auditEventId: event.id,
-        stage: 'completed',
-        target: 'human assistance',
-      })
-      return {
-        assistance,
-        requested: state.requested,
-        message:
-          assistance === 'answered'
-            ? 'The person finished and handed control back. Take a fresh snapshot because the page may have changed.'
-            : assistance === 'cancelled'
-              ? 'The request was cancelled.'
-              : 'Nobody took control. Explain what help is still needed instead of trying the blocked step yourself.',
-      }
+      return completeHelp(reason, activityId, assistance)
     },
 
     async requestSecret(input: SecretRequest, activityId: string) {
-      const state = await post<ControlState>('/control/secret', input)
-      const event = await recordComputerAuditEvent({
-        action: 'computer_request_secret',
-        actor,
-        bot: botId,
-        eventType: 'computer.secret_requested',
-        outcome: { requested: Boolean(state.secretWanted) },
-        sessionId: options.sessionId,
-        target: {
-          label: input.label,
-          ref: input.ref,
-          snapshotId: input.snapshotId,
-        },
-      })
-      progress({
-        action: 'computer_request_secret',
-        activityId,
-        auditEventId: event.id,
-        stage: 'approved',
-        target: input.label,
-      })
+      await beginSecret(input, activityId)
       const assistance = await waitForPerson(
         (current) => current.secretWanted === undefined,
       )
-      progress({
-        action: 'computer_request_secret',
-        activityId,
-        auditEventId: event.id,
-        stage: 'completed',
-        target: input.label,
-      })
+      return completeSecret(input, activityId, assistance)
+    },
+
+    beginHelp,
+    beginSecret,
+
+    completeHelp,
+    completeSecret,
+    cancelAssistance,
+
+    control() {
+      return call<ControlState>('/control')
+    },
+
+    exportState(): ComputerGatewayState {
       return {
-        assistance,
-        requested: Boolean(state.secretWanted),
-        message:
-          assistance === 'answered'
-            ? `The person entered ${input.label} directly into the field without revealing it. Submit separately if needed.`
-            : assistance === 'cancelled'
-              ? 'The secret request was cancelled.'
-              : `Nobody entered ${input.label}. Do not ask for the value another way.`,
+        currentPageUrl,
+        ...(snapshot ? { snapshot } : {}),
       }
     },
 
@@ -682,7 +792,7 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
         activityId,
         'computer_click',
         input,
-        () => post<ActionResult>('/click', input),
+        () => post<ActionResult>('/click', withSnapshotSession(input)),
       )
       currentPageUrl = result.url
       snapshot = undefined
@@ -698,7 +808,7 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
           snapshotId: input.snapshotId,
           ...(input.submit ? { key: 'Enter' } : {}),
         },
-        () => post<ActionResult>('/type', input),
+        () => post<ActionResult>('/type', withSnapshotSession(input)),
       )
       currentPageUrl = result.url
       snapshot = undefined
@@ -716,7 +826,7 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
             : {}),
           key: input.key,
         },
-        () => post<ActionResult>('/key', input),
+        () => post<ActionResult>('/key', withSnapshotSession(input)),
       )
       currentPageUrl = result.url
       snapshot = undefined

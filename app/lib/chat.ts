@@ -84,9 +84,17 @@ export type ChatStreamEvent =
   | { activity: ChatActivity; type: 'activity' }
   | { frame: ChatComputerFrame; type: 'computer-frame' }
   | {
+      backgroundKind?: 'openai'
       responseId: string
       resumeToken: string
       sequenceNumber: number
+      type: 'background'
+    }
+  | {
+      backgroundKind: 'computer'
+      resumeToken: string
+      sequenceNumber: number
+      taskId: string
       type: 'background'
     }
   | { sequenceNumber: number; type: 'cursor' }
