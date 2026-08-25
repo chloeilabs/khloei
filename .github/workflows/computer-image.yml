@@ -45,18 +45,51 @@ jobs:
       - name: Test
         run: bun run --cwd services/computer test
 
+      # The desktop image is roughly 7.5 GB. A hosted runner starts with about
+      # 14 GB free, so the image plus its build cache can exhaust the disk. That
+      # surfaces only as a container that will not start, with no error of its
+      # own, so the space is reclaimed before the build rather than diagnosed
+      # after it.
+      - name: Free disk space for the desktop image
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+            /usr/local/share/powershell /usr/share/swift
+          sudo docker image prune --all --force
+          df -h /
+
       - name: Build smoke image
-        run: docker build --platform linux/amd64 --file services/computer/Dockerfile.desktop --tag khloei-computer:smoke .
+        run: |
+          docker build --platform linux/amd64 --file services/computer/Dockerfile.desktop --tag khloei-computer:smoke .
+          docker builder prune --force >/dev/null 2>&1 || true
+          df -h /
 
       - name: Boot and verify smoke image
         run: |
-          docker run --detach --name khloei-computer-smoke --platform linux/amd64 --shm-size 2g --publish 4100:4100 --env COMPUTER_TOKEN=ci-computer-token khloei-computer:smoke
+          # Report rather than assume: a container that dies on start otherwise
+          # leaves nothing but a non-zero exit.
+          if ! docker run --detach --name khloei-computer-smoke --platform linux/amd64 --shm-size 2g --publish 4100:4100 --env COMPUTER_TOKEN=ci-computer-token khloei-computer:smoke; then
+            docker logs khloei-computer-smoke 2>&1 | tail -50 || true
+            docker inspect khloei-computer-smoke --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}' || true
+            df -h /
+            exit 1
+          fi
           for attempt in {1..120}; do
             if curl --fail --silent http://127.0.0.1:4100/health | jq --exit-status '.status == "ok" and .surface == "desktop" and .desktop.ready == true and .capabilities.shell == true and (.contract.version | type == "number") and (.computerSessionId | startswith("computer_"))' >/dev/null; then
               break
             fi
+            if ! docker inspect khloei-computer-smoke --format '{{.State.Running}}' | grep -q true; then
+              echo "The smoke container stopped before it became healthy."
+              docker logs khloei-computer-smoke 2>&1 | tail -50 || true
+              docker inspect khloei-computer-smoke --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}' || true
+              df -h /
+              exit 1
+            fi
             if [ "$attempt" -eq 120 ]; then
-              docker logs khloei-computer-smoke
+              docker logs khloei-computer-smoke 2>&1 | tail -50
+              docker inspect khloei-computer-smoke --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}' || true
+              df -h /
               exit 1
             fi
             sleep 1
