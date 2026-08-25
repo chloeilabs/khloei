@@ -32,6 +32,16 @@ export const COMPUTER_TOOLS = [
   "computer_read_file",
   "computer_write_file",
   "computer_list_files",
+  "computer_run_command",
+  "computer_desktop_screenshot",
+  "computer_desktop_click",
+  "computer_desktop_double_click",
+  "computer_desktop_move",
+  "computer_desktop_scroll",
+  "computer_desktop_type",
+  "computer_desktop_keypress",
+  "computer_desktop_drag",
+  "computer_desktop_wait",
 ] as const;
 
 /**
@@ -62,6 +72,16 @@ export const COMPUTER_ACTING_TOOLS = [
   "computer_read_file",
   "computer_write_file",
   "computer_list_files",
+  "computer_run_command",
+  "computer_desktop_screenshot",
+  "computer_desktop_click",
+  "computer_desktop_double_click",
+  "computer_desktop_move",
+  "computer_desktop_scroll",
+  "computer_desktop_type",
+  "computer_desktop_keypress",
+  "computer_desktop_drag",
+  "computer_desktop_wait",
 ] as const;
 
 export type ComputerActingToolName = (typeof COMPUTER_ACTING_TOOLS)[number];
@@ -112,11 +132,13 @@ export type SwitchTabInput = { tabId: string };
 export type CloseTabInput = { tabId: string };
 
 export type ScreenshotResult = {
-  /** PNG, base64. The transcript renders it; nothing else interprets it. */
+  /** Encoded image bytes. The transcript renders it; nothing else interprets it. */
   base64: string;
   width: number;
   height: number;
   capturedAt: string;
+  /** Added with full-desktop vision. Missing means the original PNG contract. */
+  mimeType?: "image/jpeg" | "image/png";
   /**
    * The page this is a picture of, or `about:blank` for a browser that has not been sent anywhere.
    *
@@ -125,6 +147,46 @@ export type ScreenshotResult = {
    * failure that matters is a real screenshot being hidden behind a placeholder.
    */
   url?: string;
+};
+
+export type DesktopPoint = { x: number; y: number };
+export type DesktopMouseButton = "left" | "middle" | "right";
+
+/**
+ * Pixel-level fallbacks for native Linux UI, canvas content and dialogs that
+ * do not expose browser accessibility refs. They deliberately mirror the
+ * computer-use primitives while remaining ordinary function tools, which
+ * keeps OpenAI and OpenRouter on the same audited, exactly-once path.
+ */
+export type DesktopAction =
+  | {
+      action: "click";
+      x: number;
+      y: number;
+      button: DesktopMouseButton;
+    }
+  | {
+      action: "double_click";
+      x: number;
+      y: number;
+      button: DesktopMouseButton;
+    }
+  | { action: "move"; x: number; y: number }
+  | { action: "scroll"; x: number; y: number; deltaX: number; deltaY: number }
+  | { action: "type"; text: string }
+  | { action: "keypress"; keys: string[] }
+  | { action: "drag"; path: DesktopPoint[]; button: DesktopMouseButton }
+  | { action: "wait"; durationMs: number };
+
+export type DesktopScreenshotResult = ScreenshotResult & {
+  mimeType: "image/jpeg" | "image/png";
+  url: "desktop://khloei";
+};
+
+export type DesktopActionResult = {
+  action: DesktopAction["action"];
+  elapsedMs: number;
+  screenshot: DesktopScreenshotResult;
 };
 
 /** The current page as text, without opening anything. Same shape as a navigation, minus the trip. */

@@ -6,8 +6,8 @@
  * as code.
  *
  * Rules are `*`, `tool:<name>`, `intent:<name>`, `host:<hostname>`,
- * `file:<path>`, `extension:<ext>`, `element:<label>`, `actor:<id>`, or
- * `bot:<id>`. A trailing `*` is a prefix wildcard. Matching is
+ * `file:<path>`, `extension:<ext>`, `element:<label>`, `command:<prefix>`,
+ * `actor:<id>`, or `bot:<id>`. A trailing `*` is a prefix wildcard. Matching is
  * case-insensitive.
  */
 
@@ -62,6 +62,7 @@ export type PolicyDecision = {
 const RULE_FIELDS = new Set([
   'actor',
   'bot',
+  'command',
   'element',
   'extension',
   'file',
@@ -76,6 +77,8 @@ function valueFor(field: string, context: PolicyContext) {
       return context.actor.id
     case 'bot':
       return context.bot.id
+    case 'command':
+      return context.command ?? ''
     case 'element':
       return context.element?.name ?? ''
     case 'extension':
@@ -121,11 +124,13 @@ function matchesRule(rule: string, context: PolicyContext) {
 function refusal(context: PolicyContext, rule: string) {
   const subject = context.file?.path
     ? `the file ${context.file.path}`
-    : context.element?.name
-      ? `“${context.element.name}”`
-      : context.page.host
-        ? `${context.tool.name} on ${context.page.host}`
-        : context.tool.name
+    : context.command
+      ? 'that command'
+      : context.element?.name
+        ? `“${context.element.name}”`
+        : context.page.host
+          ? `${context.tool.name} on ${context.page.host}`
+          : context.tool.name
   return `Khloei's computer policy blocks ${subject} by the rule \`${rule}\`.`
 }
 

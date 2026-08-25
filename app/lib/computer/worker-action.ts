@@ -14,6 +14,7 @@ import {
 } from './gateway'
 import type { SecretRequest } from './schema'
 import {
+  desktopScreenshotFromToolOutcome,
   executeComputerTool,
   isBrowserComputerTool,
 } from './tools'
@@ -155,12 +156,14 @@ export async function performWorkerComputerOperation(
     sessionId: request.taskId,
   })
 
-  const frame = async () => {
-    const screenshot = await gateway.screenshot()
+  const frame = async (
+    supplied?: Awaited<ReturnType<typeof gateway.screenshot>>,
+  ) => {
+    const screenshot = supplied ?? (await gateway.screenshot())
     if (screenshot.url === 'about:blank') return
     const value: ChatComputerFrame = {
       capturedAt: screenshot.capturedAt,
-      dataUrl: `data:image/png;base64,${screenshot.base64}`,
+      dataUrl: `data:${screenshot.mimeType ?? 'image/png'};base64,${screenshot.base64}`,
       height: screenshot.height,
       url: publicBrowserUrl(screenshot.url),
       width: screenshot.width,
@@ -243,5 +246,10 @@ export async function performWorkerComputerOperation(
   if (outcome.ok && isBrowserComputerTool(request.invocation.name)) {
     await frame().catch(() => undefined)
   }
+  const desktopFrame = desktopScreenshotFromToolOutcome(
+    request.invocation.name,
+    outcome,
+  )
+  if (desktopFrame) await frame(desktopFrame)
   return { events, gatewayState: gateway.exportState(), outcome }
 }

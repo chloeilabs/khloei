@@ -13,12 +13,13 @@ long response can resume after a transient disconnect, a serverless timeout, or
 a browser reload. Stop and New Chat also cancel the active background response
 at OpenAI.
 
-Computer Use gives Khloei a persistent Playwright browser and a confined file
-workspace. Browser and file tools are selected by the model, but every tool call
-passes through a server-side policy gateway and an append-only audit log before
-it can run. Completion or failure is recorded afterward. An optional durable
-Agents SDK worker moves the long-running model loop outside Vercel, checkpoints
-it in SQLite, and reconnects the chat after reloads or transient disconnects.
+Computer Use gives Khloei a persistent Playwright browser, a confined file
+workspace, and an optional full Linux desktop. Browser, file, command, and
+full-desktop visual tools are selected by the model, but every tool call passes
+through a server-side policy gateway and an append-only audit log before it can run.
+Completion or failure is recorded afterward. An optional durable Agents SDK
+worker moves the long-running model loop outside Vercel, checkpoints it in
+SQLite, and reconnects the chat after reloads or transient disconnects.
 
 ## Getting Started
 
@@ -91,13 +92,81 @@ npm run dev
 Open [http://localhost:3000](http://localhost:3000), then select **Computer
 Use** from the Skills menu.
 
+## Linux desktop prototype
+
+Khloei can replace the lightweight headless computer service with a persistent
+Xfce Linux desktop containing Chrome, Firefox, Terminal, Files, Git, Python,
+Node.js, Bun, ripgrep, and VS Code. It uses the same scoped live viewer, explicit
+human takeover, persistent browser profile, workspace, and audit API as browser
+mode, so the React app never receives `COMPUTER_TOKEN` or a general-purpose VNC
+credential.
+
+Install Docker Desktop, keep the normal `COMPUTER_TOKEN` and computer URLs in
+`.env.local`, and start the desktop instead of `npm run computer:dev`:
+
+```bash
+npm run computer:desktop:up
+```
+
+Then start the durable worker and Next.js app normally:
+
+```bash
+npm run agent:dev
+npm run dev
+```
+
+Select **Computer Use**, expand the newest computer card, and choose **Take
+control** to interact with the complete desktop. Stop it with:
+
+```bash
+npm run computer:desktop:down
+```
+
+The Compose project retains separate named volumes for the Linux home,
+workspace, browser profiles, and audit chain across ordinary stop/start or
+container replacement. Port 4100 is bound only to loopback. KasmVNC runs inside
+the container to own the Xfce session, but its port is not published; its
+internal password is randomly generated at startup and is not part of the
+Khloei UI.
+
+The pinned full-desktop image is currently amd64. Docker Desktop can emulate it
+on Apple Silicon, but a native amd64 Linux host will have lower input and video
+latency. The default desktop is 1920×1080 at 30 frames per second with
+maximum-quality JPEG encoding. Frames
+travel as binary WebSocket messages rather than base64-in-JSON, and stale frames
+are dropped when a viewer is slow rather than accumulating memory. Override
+`KHLOEI_DESKTOP_RESOLUTION`, `KHLOEI_DESKTOP_FRAME_RATE` (2–30), or
+`KHLOEI_DESKTOP_JPEG_QUALITY` (2–12, lower is sharper) when a remote host needs a
+different quality/bandwidth balance.
+
+Khloei can use the browser accessibility tools, confined workspace reads and
+writes, and a governed command runner to code, install project dependencies,
+and run tests inside the desktop. Commands run as UID 1000 with no Linux
+capabilities or privilege escalation; they start in `/data/workspace`, receive
+only an allowlisted environment, and cannot see `COMPUTER_TOKEN`. The command,
+policy decision, and bounded result metadata are recorded in the audit chain,
+while stdout and stderr are returned to the agent but omitted from the audit
+file. This is still a container boundary, not permission to access its Docker
+host or other private services.
+
+For native applications, operating-system dialogs, canvas content, and other
+UI without usable browser accessibility refs, Khloei can capture the complete
+1920×1080 desktop and use governed click, double-click, move, scroll, type,
+keypress, drag, and wait primitives. Every primitive is serialized with human
+input, refused while a person holds control, and returns a fresh maximum-quality
+JPEG to both the model and transcript. Typed text and image bytes are omitted
+from the audit trail. Browser refs, files, and shell remain the preferred path
+because they are faster and less error-prone than coordinates.
+
 ## Computer Use architecture
 
 Khloei's computer service provides durable local data paths, browser profiles,
-files, and audit storage. The OpenAI Agents SDK selects Khloei's published
-browser and file tools, while the Next.js gateway supplies policy decisions,
-target protection, the audit chain, streaming activity, and live browser
-frames.
+files, and audit storage. In desktop mode it also owns a complete Xfce session,
+streams the root display through the same scoped viewer socket, and publishes
+the governed non-root command tool. The OpenAI Agents SDK selects Khloei's
+browser, file, and desktop tools, while the Next.js gateway supplies policy
+decisions, target protection, the audit chain, streaming activity, and live
+computer frames.
 
 When `KHLOEI_AGENT_WORKER_URL` is configured, the single-replica worker owns
 the Agents SDK run loop instead of a Vercel function. It stores the serialized
@@ -111,10 +180,59 @@ but before its result was committed, Khloei records the outcome as ambiguous,
 does not replay the action, and inspects the current computer state before
 continuing.
 
+Long computer runs execute as serialized 24-turn SDK segments. Reaching a
+segment boundary checkpoints and resumes the same `RunState` automatically, so
+the first boundary is not a terminal error and completed tool actions are not
+replayed. A 96-turn per-request ceiling remains as the final runaway guard; at
+that ceiling the desktop and completed work stay available for a deliberate
+follow-up request.
+
 The default lease is 30 seconds with a 10-second heartbeat and a 5-second stale
 task sweep. `AGENT_WORKER_RETENTION_DAYS` removes completed, failed, and
 cancelled task data after 30 days; set it to `0` to disable automatic retention.
-Active and human-waiting tasks are never removed. Run `bun run eval:computer`
+Active and human-waiting tasks are never removed.
+
+### Screenshot storage
+
+A visual desktop action answers with a full-resolution JPEG, so keeping those
+bytes inline would leave tens of megabytes of base64 in the action ledger and
+the transcript for every screenshot-heavy task, retained for as long as the task
+is. Screenshot bytes are instead written to `AGENT_WORKER_SCREENSHOT_DIR`
+(default: `screenshots/` beside the database on the same durable volume), named
+by the SHA-256 of their content, and the ledger keeps only a reference. An
+unchanged desktop observed many times is stored once.
+
+Exactly-once replay is unchanged: the ledger row is still the single record of
+whether an action ran, and the reference is only how its picture is found again.
+Bytes are written before the row that cites them, and a store that cannot accept
+them leaves the screenshot inline rather than failing the commit of an action
+that has already been carried out.
+
+Retention is a sweep on the existing maintenance cadence:
+`AGENT_WORKER_SCREENSHOT_MAX_AGE_DAYS` (default 7) then
+`AGENT_WORKER_SCREENSHOT_MAX_BYTES` (default 512 MiB), oldest first. The budget
+is clamped at startup to half the volume it is mounted on, and the reduction is
+logged: screenshots share that volume with the task database, and a budget
+larger than the disk would let cached pictures stall the ledger that makes an
+action exactly-once. Losing old screenshots is recoverable; losing the ledger is
+not. Blobs are
+shared between actions, so they are not deleted with the task that cited them.
+Replaying an action whose screenshot has been swept returns its metadata with
+`screenshotUnavailable`, so Khloei reads a small honest result and takes a fresh
+screenshot instead of receiving a broken image; the transcript shows the same
+thing in place of the frame. The worker's `/health` reports the directory, file
+count, bytes used, and the fraction of budget consumed.
+
+### Deployment parity
+
+The app, the worker, and the computer image deploy on different cadences, so
+[`shared/computer-contract.ts`](./shared/computer-contract.ts) names the
+contract each side was built against. The computer reports it on `/health`,
+which stays unauthenticated, and `GET /api/computer/status` compares the two:
+`200` aligned, `409` reachable but mismatched, `503` unreachable. The response
+names the specific capabilities a behind image is missing rather than only that
+two numbers differ, and an image old enough to omit the field is reported as
+unknown rather than assumed compatible. Run `bun run eval:computer`
 to exercise the real Khloei agent graph against side-effect-free safety
 fixtures; local reports are written under `evals/results/`.
 
@@ -131,7 +249,8 @@ forwards the user's mouse, keyboard, paste, and scroll events over that viewer
 socket. **Hand back** returns control to Khloei. Human input is deliberately
 distinguished from model actions: model tool calls pass through the policy and
 audit sequence below, while direct human input is authorized by the explicit
-takeover state.
+takeover state. In browser mode the socket carries a Chrome page; in desktop
+mode it carries the full Linux display.
 
 When Khloei reaches a CAPTCHA or multi-step sign-in, the help tool publishes the
 live frame immediately and waits up to ten minutes for the user to take and hand
@@ -147,7 +266,8 @@ drives the live screencast, and its browser profile persists between requests.
 Set `COMPUTER_MAX_TABS` on the computer service to change the default limit of
 12 concurrent tabs.
 
-The gateway enforces this order for every published browser or file tool:
+The gateway enforces this order for every published browser, file, command, or
+full-desktop visual tool:
 
 1. Resolve the requested action and current browser element.
 2. Evaluate the deny-first policy.
@@ -165,16 +285,16 @@ file tools cannot read browser sessions or their own audit trail.
 
 The optional `KHLOEI_COMPUTER_POLICY` variable accepts a JSON policy. Rules are
 deny-first; supported selectors include `tool:`, `intent:`, `host:`, `file:`,
-`extension:`, `element:`, `actor:`, and `bot:`. A trailing `*` is a prefix
-wildcard. For example:
+`command:`, `extension:`, `element:`, `actor:`, and `bot:`. A trailing `*` is a
+prefix wildcard. For example:
 
 ```bash
 KHLOEI_COMPUTER_POLICY={"mode":"enforce","deny":["host:example.com"],"allow":["*"]}
 ```
 
 The browser gateway also blocks loopback, private-network, and cloud-metadata
-targets by default. Set `KHLOEI_COMPUTER_ALLOW_PRIVATE_HOSTS=true` only inside a
-network boundary you control.
+targets by default. `KHLOEI_COMPUTER_ALLOW_PRIVATE_HOSTS=true` is a local-only
+escape hatch for development; production refuses to start with it enabled.
 
 ## Deployment
 
@@ -186,7 +306,7 @@ Railway's build workers while Railway continues to own the runtime and volume.
 The equivalent local build is:
 
 ```bash
-docker build -f services/computer/Dockerfile -t khloei-computer .
+docker build --platform linux/amd64 -f services/computer/Dockerfile.desktop -t khloei-computer .
 ```
 
 The [`agent-worker-image.yml`](./.github/workflows/agent-worker-image.yml)
@@ -221,6 +341,12 @@ PROFILES_DIR=/data/profiles
 AUDIT_DIR=/data/audit
 ```
 
+The same `/data` volume also retains the Linux home at `/data/home`. The image
+repairs ownership on a newly attached or legacy volume, then permanently drops
+to UID/GID 1000 with an empty capability set before starting either the desktop
+or command service. Keep `KHLOEI_COMPUTER_SHELL_ENABLED=true` on the desktop
+service; the lightweight browser-only image leaves command execution disabled.
+
 The workflow's deploy step is enabled with the repository variable
 `RAILWAY_DEPLOY_ENABLED=true` and an environment-scoped Railway project token in
 the `RAILWAY_TOKEN` GitHub Actions secret. Railway should use
@@ -240,10 +366,11 @@ than Vercel's ephemeral function filesystem. If the computer service can share
 a private network with the app, keep its root endpoint private and expose only
 the viewer stream through a TLS proxy.
 
-The computer exposes browser and workspace operations only; it has no shell
-endpoint. Every accessibility snapshot carries the current computer-process
-session id, so a durable task cannot reuse element references after the
-computer restarts and resets its numeric snapshot counter.
+Every accessibility snapshot carries the current computer-process session id,
+so a durable task cannot reuse element references after the computer restarts
+and resets its numeric snapshot counter. Command execution is available only
+from the desktop image and is refused if that service is accidentally started
+as root.
 
 Tool completion, gateway state, user-visible activity, and the pre-return agent
 checkpoint are committed together in one SQLite transaction. A restart after

@@ -17,8 +17,9 @@ import type {
 } from 'openai/resources/responses/responses'
 
 import {
+  COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE,
   COMPUTER_AGENT_INSTRUCTIONS,
-  MAX_COMPUTER_AGENT_TURNS,
+  computerAgentTurnLimit,
   createComputerAgentTools,
   type ComputerAgentContext,
   type ComputerToolInvocation,
@@ -304,12 +305,12 @@ export class ComputerTaskRuntime {
       if (action.kind === 'replay') {
         if (isCommittedActionResult(action.result)) {
           gatewayState = action.result.gatewayState
-          return JSON.stringify(action.result.outcome)
+          return action.result.outcome
         }
         // Checkpoints written by the first local worker build stored only the
         // tool outcome. Keeping this one-way compatibility path lets those
         // tasks finish, while every new commit stores the complete boundary.
-        return JSON.stringify(action.result)
+        return action.result
       }
 
       const result = await this.app.operation(
@@ -330,7 +331,7 @@ export class ComputerTaskRuntime {
         runState,
       )
       if (appendedEvents > 0) this.notifier.notify(task.id)
-      return JSON.stringify(result.outcome)
+      return result.outcome
     }
 
     try {
@@ -411,162 +412,195 @@ export class ComputerTaskRuntime {
           : task.request.input
       }
 
-      const run = await runner.run(agent, input, {
-        context: contextValue,
-        maxTurns: MAX_COMPUTER_AGENT_TURNS,
-        ...(task.request.provider === 'openai' &&
-        task.request.previousResponseId &&
-        !task.runState
-          ? { previousResponseId: task.request.previousResponseId }
-          : {}),
-        signal,
-        stream: true,
-      })
-      activeRunState = run.state
-      let pendingText = ''
-      let terminal: OpenAIResponse | undefined
-      let lastTextFlush = Date.now()
-      let lastRunStateCheckpoint = 0
-
-      const checkpointRunState = (force = false) => {
-        const now = Date.now()
-        if (!force && now - lastRunStateCheckpoint < 100) return
-        this.store.saveRunState(
-          task.id,
-          encodeRunStateCheckpoint(run.state.toString()),
-        )
-        lastRunStateCheckpoint = now
+      let turnLimit = computerAgentTurnLimit(
+        input instanceof RunState ? input.toJSON() : { currentTurn: 0 },
+      )
+      let firstSegment = true
+      if (turnLimit === null) {
+        throw new Error(COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE)
       }
 
-      const flushText = () => {
-        if (!pendingText) return
-        this.append(task.id, { delta: pendingText, type: 'text-delta' })
-        pendingText = ''
-        lastTextFlush = Date.now()
-      }
-
-      for await (const runEvent of run) {
-        checkpointRunState()
-        if (!isOpenAIResponsesRawModelStreamEvent(runEvent)) continue
-        const event = runEvent.data.event
-
-        if (
-          event.type === 'response.output_text.delta' ||
-          event.type === 'response.refusal.delta'
-        ) {
-          pendingText += event.delta
-          if (pendingText.length >= 256 || Date.now() - lastTextFlush >= 100) {
-            flushText()
-          }
-          continue
-        }
-
-        flushText()
-        if (
-          event.type === 'response.output_item.added' ||
-          event.type === 'response.output_item.done'
-        ) {
-          checkpointRunState(true)
-          const activity = outputItemActivity(
-            event.item,
-            event.type === 'response.output_item.done',
-          )
-          if (activity) this.append(task.id, activity)
-        } else if (
-          event.type === 'response.web_search_call.in_progress' ||
-          event.type === 'response.web_search_call.searching' ||
-          event.type === 'response.web_search_call.completed'
-        ) {
-          this.append(task.id, {
-            activity: {
-              id: event.item_id,
-              kind: 'web_search',
-              status:
-                event.type === 'response.web_search_call.searching'
-                  ? 'searching'
-                  : event.type === 'response.web_search_call.completed'
-                    ? 'completed'
-                    : 'in_progress',
-            },
-            type: 'activity',
-          })
-        } else if (
-          event.type === 'response.completed' ||
-          event.type === 'response.incomplete' ||
-          event.type === 'response.failed'
-        ) {
-          checkpointRunState(true)
-          terminal = event.response
-        } else if (event.type === 'error') {
-          throw new Error(event.message)
-        }
-      }
-      flushText()
-      await run.completed
-      checkpointRunState(true)
-
-      if (run.interruptions.length > 0) {
-        if (run.interruptions.length !== 1) {
-          throw new Error('Khloei received multiple human requests at once.')
-        }
-        const invocation = approvalInvocation(run.interruptions[0]!)
-        const begin = await this.app.operation(
-          'begin_assistance',
-          task.id,
-          invocation,
-          gatewayState,
+      for (;;) {
+        const run = await runner.run(agent, input, {
+          context: contextValue,
+          maxTurns: turnLimit,
+          ...(firstSegment &&
+          task.request.provider === 'openai' &&
+          task.request.previousResponseId &&
+          !task.runState
+            ? { previousResponseId: task.request.previousResponseId }
+            : {}),
           signal,
-        )
-        gatewayState = begin.gatewayState
-        this.appendAppResult(task.id, begin)
-        const approval: PendingApproval = {
-          invocation,
-          ready: false,
-          requestedAt: Date.now(),
-        }
-        this.store.setWaiting(
-          task.id,
-          encodeRunStateCheckpoint(run.state.toString()),
-          approval,
-        )
-        this.notifier.notify(task.id)
-        return
-      }
+          stream: true,
+        })
+        activeRunState = run.state
+        let pendingText = ''
+        let terminal: OpenAIResponse | undefined
+        let lastTextFlush = Date.now()
+        let lastRunStateCheckpoint = 0
 
-      if (!terminal) {
-        const content = normalizeComputerMarkdown(
-          typeof run.finalOutput === 'string' ? run.finalOutput : '',
-        )
+        const checkpointRunState = (force = false) => {
+          const now = Date.now()
+          if (!force && now - lastRunStateCheckpoint < 100) return
+          this.store.saveRunState(
+            task.id,
+            encodeRunStateCheckpoint(run.state.toString()),
+          )
+          lastRunStateCheckpoint = now
+        }
+
+        const flushText = () => {
+          if (!pendingText) return
+          this.append(task.id, { delta: pendingText, type: 'text-delta' })
+          pendingText = ''
+          lastTextFlush = Date.now()
+        }
+
+        try {
+          for await (const runEvent of run) {
+            checkpointRunState()
+            if (!isOpenAIResponsesRawModelStreamEvent(runEvent)) continue
+            const event = runEvent.data.event
+
+            if (
+              event.type === 'response.output_text.delta' ||
+              event.type === 'response.refusal.delta'
+            ) {
+              pendingText += event.delta
+              if (
+                pendingText.length >= 256 ||
+                Date.now() - lastTextFlush >= 100
+              ) {
+                flushText()
+              }
+              continue
+            }
+
+            flushText()
+            if (
+              event.type === 'response.output_item.added' ||
+              event.type === 'response.output_item.done'
+            ) {
+              checkpointRunState(true)
+              const activity = outputItemActivity(
+                event.item,
+                event.type === 'response.output_item.done',
+              )
+              if (activity) this.append(task.id, activity)
+            } else if (
+              event.type === 'response.web_search_call.in_progress' ||
+              event.type === 'response.web_search_call.searching' ||
+              event.type === 'response.web_search_call.completed'
+            ) {
+              this.append(task.id, {
+                activity: {
+                  id: event.item_id,
+                  kind: 'web_search',
+                  status:
+                    event.type === 'response.web_search_call.searching'
+                      ? 'searching'
+                      : event.type === 'response.web_search_call.completed'
+                        ? 'completed'
+                        : 'in_progress',
+                },
+                type: 'activity',
+              })
+            } else if (
+              event.type === 'response.completed' ||
+              event.type === 'response.incomplete' ||
+              event.type === 'response.failed'
+            ) {
+              checkpointRunState(true)
+              terminal = event.response
+            } else if (event.type === 'error') {
+              throw new Error(event.message)
+            }
+          }
+          flushText()
+          await run.completed
+          checkpointRunState(true)
+        } catch (error) {
+          flushText()
+          if (error instanceof MaxTurnsExceededError) {
+            checkpointRunState(true)
+            const nextTurnLimit = computerAgentTurnLimit(run.state.toJSON())
+            if (nextTurnLimit !== null && nextTurnLimit > turnLimit) {
+              // The checkpoint and action ledger together make this continuation crash-safe: the
+              // model resumes the same transcript and completed tool calls remain exactly-once.
+              input = run.state
+              turnLimit = nextTurnLimit
+              firstSegment = false
+              continue
+            }
+          }
+          throw error
+        }
+
+        if (run.interruptions.length > 0) {
+          if (run.interruptions.length !== 1) {
+            throw new Error('Khloei received multiple human requests at once.')
+          }
+          const invocation = approvalInvocation(run.interruptions[0]!)
+          const begin = await this.app.operation(
+            'begin_assistance',
+            task.id,
+            invocation,
+            gatewayState,
+            signal,
+          )
+          gatewayState = begin.gatewayState
+          this.appendAppResult(task.id, begin)
+          const approval: PendingApproval = {
+            invocation,
+            ready: false,
+            requestedAt: Date.now(),
+          }
+          this.store.setWaiting(
+            task.id,
+            encodeRunStateCheckpoint(run.state.toString()),
+            approval,
+          )
+          this.notifier.notify(task.id)
+          return
+        }
+
+        if (!terminal) {
+          const content = normalizeComputerMarkdown(
+            typeof run.finalOutput === 'string' ? run.finalOutput : '',
+          )
+          this.append(task.id, {
+            content,
+            responseId: run.lastResponseId ?? task.id,
+            sources: [],
+            type: 'message',
+          })
+          this.append(task.id, { type: 'done' })
+          this.store.markTerminal(task.id, 'completed')
+          return
+        }
+
+        if (terminal.status === 'failed') {
+          throw new Error(
+            terminal.error?.message || 'The model response failed.',
+          )
+        }
+        if (terminal.status === 'cancelled') {
+          this.append(task.id, { type: 'cancelled' })
+          this.store.markTerminal(task.id, 'cancelled')
+          return
+        }
+        const final = finalResponse(terminal)
         this.append(task.id, {
-          content,
-          responseId: run.lastResponseId ?? task.id,
-          sources: [],
+          content: final.content,
+          responseId: terminal.id,
+          sources: final.sources,
           type: 'message',
         })
-        this.append(task.id, { type: 'done' })
-        this.store.markTerminal(task.id, 'completed')
-        return
-      }
-
-      if (terminal.status === 'failed') {
-        throw new Error(terminal.error?.message || 'The model response failed.')
-      }
-      if (terminal.status === 'cancelled') {
-        this.append(task.id, { type: 'cancelled' })
-        this.store.markTerminal(task.id, 'cancelled')
-        return
-      }
-      const final = finalResponse(terminal)
-      this.append(task.id, {
-        content: final.content,
-        responseId: terminal.id,
-        sources: final.sources,
-        type: 'message',
-      })
-      if (terminal.status === 'completed') {
-        this.append(task.id, { type: 'done' })
-        this.store.markTerminal(task.id, 'completed')
-      } else {
+        if (terminal.status === 'completed') {
+          this.append(task.id, { type: 'done' })
+          this.store.markTerminal(task.id, 'completed')
+          return
+        }
         throw new Error(
           'The response stopped before it could finish. Try narrowing the task.',
         )
@@ -592,7 +626,7 @@ export class ComputerTaskRuntime {
       if (signal.aborted) return
       const message =
         error instanceof MaxTurnsExceededError
-          ? 'Khloei stopped after the computer tool safety limit was reached. Start a new request to continue.'
+          ? COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE
           : providerError(error, task.request.provider)
       this.append(task.id, { message, type: 'error' })
       this.store.markTerminal(task.id, 'failed', message)

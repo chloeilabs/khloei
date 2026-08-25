@@ -1,0 +1,36 @@
+name: khloei-desktop
+
+services:
+  computer:
+    # Kasm's full Chrome/Firefox desktop image is currently published for amd64.
+    # Docker Desktop can emulate it on Apple Silicon for this prototype.
+    platform: linux/amd64
+    build:
+      context: .
+      dockerfile: services/computer/Dockerfile.desktop
+    environment:
+      COMPUTER_BOT_ID: khloei
+      COMPUTER_TOKEN: ${COMPUTER_TOKEN:?Set COMPUTER_TOKEN in .env.local}
+      KHLOEI_COMPUTER_SURFACE: desktop
+      KHLOEI_COMPUTER_SHELL_ENABLED: "true"
+      KHLOEI_DESKTOP_FRAME_RATE: "30"
+      KHLOEI_DESKTOP_JPEG_QUALITY: "2"
+      KHLOEI_DESKTOP_RESOLUTION: 1920x1080
+      VNC_RESOLUTION: 1920x1080
+    init: true
+    ports:
+      # The app's audited API and scoped viewer stream.
+      - "127.0.0.1:4100:4100"
+    restart: unless-stopped
+    shm_size: 2gb
+    volumes:
+      - khloei_home:/data/home
+      - khloei_workspace:/data/workspace
+      - khloei_profiles:/data/profiles
+      - khloei_audit:/data/audit
+
+volumes:
+  khloei_home:
+  khloei_workspace:
+  khloei_profiles:
+  khloei_audit:

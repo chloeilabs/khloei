@@ -39,6 +39,7 @@ import { type BrowserContext, chromium, type Page } from "playwright";
 import { profileDirectoryFor } from "./bot-id";
 import { chooseEvictions, chooseIdle } from "./browser-eviction";
 import { egressFor, egressLabel } from "./egress";
+import { COMPUTER_SURFACE } from "./surface";
 
 /** The viewport, which is what a person's click coordinates are relative to. */
 export const VIEWPORT = { width: 1280, height: 800 };
@@ -84,11 +85,26 @@ const SINGLETON_FILES = ["SingletonLock", "SingletonSocket", "SingletonCookie"];
  * whether the browser rendering the open internet is sandboxed.
  */
 const SANDBOX_ENABLED = process.env.COMPUTER_SANDBOX === "on";
+const DESKTOP_BROWSER = COMPUTER_SURFACE === "desktop";
+const CHROMIUM_EXECUTABLE = process.env.COMPUTER_CHROMIUM_EXECUTABLE?.trim();
 
 const LAUNCH_ARGS = [
   ...(SANDBOX_ENABLED ? [] : ["--no-sandbox"]),
   "--disable-dev-shm-usage",
   "--password-store=basic",
+  ...(DESKTOP_BROWSER ? ["--start-maximized"] : []),
+];
+
+/**
+ * Playwright disables Chromium's normal background throttling for deterministic tests. Khloei's
+ * desktop is a long-lived browser, not a test: keeping every hidden tab at foreground priority can
+ * consume whole CPU cores on ad-heavy pages. Filter only those three flags in headed desktop mode;
+ * browser-only automation keeps Playwright's defaults.
+ */
+const DESKTOP_IGNORED_DEFAULT_ARGS = [
+  "--disable-background-timer-throttling",
+  "--disable-backgrounding-occluded-windows",
+  "--disable-renderer-backgrounding",
 ];
 
 console.info(
@@ -376,11 +392,20 @@ export function createProfiles(root: string) {
       const proxy = egressFor(botId, process.env);
       const context = await chromium.launchPersistentContext(dir, {
         args: LAUNCH_ARGS,
+        headless: !DESKTOP_BROWSER,
+        ...(DESKTOP_BROWSER
+          ? { ignoreDefaultArgs: DESKTOP_IGNORED_DEFAULT_ARGS }
+          : {}),
+        ...(CHROMIUM_EXECUTABLE
+          ? { executablePath: CHROMIUM_EXECUTABLE }
+          : {}),
         // Playwright adds `--no-sandbox` on its own unless told otherwise, so leaving this out
         // means the flag above decides nothing and a deployment that asked for the sandbox does
         // not get one. Verified by reading the launched process arguments, not by trusting either.
         chromiumSandbox: SANDBOX_ENABLED,
-        viewport: VIEWPORT,
+        // Let the headed browser use the available Xfce workspace. Browser-only mode keeps the
+        // fixed viewport its screencast and pointer mapping were designed around.
+        viewport: DESKTOP_BROWSER ? null : VIEWPORT,
         // This process owns shutdown. Playwright's signal handlers kill Chromium immediately on
         // SIGTERM, before pending cookie writes have time to flush.
         handleSIGTERM: false,

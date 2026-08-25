@@ -3,6 +3,11 @@ import { createHash, randomUUID } from 'node:crypto'
 import { dirname } from 'node:path'
 import { mkdirSync } from 'node:fs'
 
+import {
+  dehydrateScreenshots,
+  rehydrateScreenshots,
+} from './screenshot-refs'
+import type { ScreenshotStore } from './screenshot-store'
 import type {
   ComputerTaskRequest,
   PendingApproval,
@@ -118,8 +123,14 @@ export class AmbiguousActionError extends Error {
 
 export class TaskStore {
   readonly database: Database
+  /**
+   * Where screenshot bytes live instead of the ledger. Absent means the ledger
+   * keeps behaving exactly as it did before durable screenshot storage.
+   */
+  readonly screenshots: ScreenshotStore | null
 
-  constructor(path: string) {
+  constructor(path: string, screenshots: ScreenshotStore | null = null) {
+    this.screenshots = screenshots
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
     this.database = new Database(path, { create: true, strict: true })
     this.database.run('PRAGMA journal_mode = WAL')
@@ -243,13 +254,20 @@ export class TaskStore {
          LIMIT ?`,
       )
       .all(taskId, sequenceNumber, limit)
-      .map(
-        (row): TaskEvent => ({
+      .map((row): TaskEvent => {
+        const payload = JSON.parse(row.payload_json) as unknown
+        return {
           createdAt: row.created_at,
-          payload: JSON.parse(row.payload_json) as unknown,
+          // Transcript frames were externalized on the way in, so they are put
+          // back here. A swept blob comes back marked unavailable rather than
+          // as a broken image, and the sequence number is untouched either way
+          // so a reader's cursor still advances.
+          payload: this.screenshots
+            ? rehydrateScreenshots(payload, this.screenshots).value
+            : payload,
           sequenceNumber: row.sequence,
-        }),
-      )
+        }
+      })
   }
 
   latestSequence(taskId: string) {
@@ -449,7 +467,15 @@ export class TaskStore {
         .run(taskId, callId, toolName, hash, Date.now())
       return { kind: 'execute' as const }
     })
-    return transaction.immediate()
+    const outcome = transaction.immediate()
+    if (outcome.kind !== 'replay' || !this.screenshots) return outcome
+    // Reading blobs happens after the transaction commits: the ledger row is
+    // what makes this call exactly-once, and file reads must not hold a write
+    // transaction open on the durable volume.
+    return {
+      kind: 'replay',
+      result: rehydrateScreenshots(outcome.result, this.screenshots).value,
+    }
   }
 
   commitActionResult(
@@ -458,11 +484,23 @@ export class TaskStore {
     response: WorkerActionResponse,
     runState?: string,
   ) {
+    // Screenshot bytes are written to durable storage before the ledger row that
+    // cites them, so a committed action can never reference a blob that does not
+    // exist. A store that refuses the write leaves the bytes inline rather than
+    // failing a commit for an action that has already been carried out.
+    const store = this.screenshots
+    const outcome = store
+      ? dehydrateScreenshots(response.outcome, store).value
+      : response.outcome
+    const events = store
+      ? response.events.map((event) => dehydrateScreenshots(event, store).value)
+      : response.events
+
     const transaction = this.database.transaction(() => {
       const now = Date.now()
       const committed: CommittedActionResult = {
         gatewayState: response.gatewayState,
-        outcome: response.outcome,
+        outcome,
       }
       const action = this.database
         .query(
@@ -497,10 +535,10 @@ export class TaskStore {
         `INSERT INTO task_events (task_id, payload_json, created_at)
          VALUES (?, ?, ?)`,
       )
-      for (const event of response.events) {
+      for (const event of events) {
         append.run(taskId, JSON.stringify(event), now)
       }
-      return response.events.length
+      return events.length
     })
     return transaction.immediate()
   }

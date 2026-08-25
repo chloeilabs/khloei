@@ -5,6 +5,7 @@ import {
   StaleSnapshotError,
   type ComputerTransport,
 } from './client'
+import { privateHostsAllowed } from './config'
 import {
   evaluateActionPolicy,
   type ActionPolicy,
@@ -16,6 +17,9 @@ import type {
   ClickInput,
   CloseTabInput,
   ControlState,
+  DesktopAction,
+  DesktopActionResult,
+  DesktopScreenshotResult,
   KeyInput,
   ListFilesInput,
   ListFilesResult,
@@ -25,6 +29,8 @@ import type {
   ReadFileInput,
   ReadFileResult,
   ReadResult,
+  RunCommandInput,
+  RunCommandResult,
   ScreenshotResult,
   ScrollInput,
   SecretRequest,
@@ -81,26 +87,35 @@ export type ComputerGatewayState = {
 }
 
 type GovernedSubject = {
+  button?: string
+  characters?: number
+  command?: string
+  deltaX?: number
+  deltaY?: number
+  durationMs?: number
   filePath?: string
   key?: string
+  points?: number
   ref?: string
   snapshotId?: number
   tabId?: string
   targetUrl?: string
+  x?: number
+  y?: number
 }
 
 const DEFAULT_POLICY: ActionPolicy = {
   mode: 'enforce',
-  // The vendored computer can run commands when it is containerized. Khloei's
-  // local integration deliberately does not publish that tool because the
-  // service may be running directly on a developer machine.
-  deny: ['intent:run_command'],
+  // Shell publication is separately gated by the desktop container, which refuses to execute as
+  // root. Once published, it is governed and audited exactly like every other acting tool.
+  deny: [],
   allow: ['*'],
 }
 
 const ACTIVATING_KEYS = new Set(['Enter', 'NumpadEnter', 'Space', ' '])
 const HUMAN_ASSISTANCE_WAIT_MS = 10 * 60_000
 const HUMAN_ASSISTANCE_POLL_MS = 1_000
+const COMMAND_BACKSTOP_MS = 615_000
 
 function configuredPolicy(): ActionPolicy {
   const raw = process.env.KHLOEI_COMPUTER_POLICY?.trim()
@@ -176,12 +191,20 @@ function intentOf(
   action: string,
   key: string | undefined,
 ): PolicyContext['intent'] {
+  const activatingKey = key
+    ?.split('+')
+    .some((part) => ACTIVATING_KEYS.has(part))
   switch (action) {
     case 'computer_click':
+    case 'computer_desktop_click':
+    case 'computer_desktop_double_click':
+    case 'computer_desktop_drag':
       return 'activate'
     case 'computer_key':
     case 'computer_type':
-      return key && ACTIVATING_KEYS.has(key) ? 'activate' : 'type'
+    case 'computer_desktop_keypress':
+    case 'computer_desktop_type':
+      return activatingKey ? 'activate' : 'type'
     case 'computer_navigate':
     case 'computer_open_tab':
       return 'navigate'
@@ -192,6 +215,10 @@ function intentOf(
     case 'computer_list_tabs':
     case 'computer_snapshot':
     case 'computer_scroll':
+    case 'computer_desktop_screenshot':
+    case 'computer_desktop_move':
+    case 'computer_desktop_scroll':
+    case 'computer_desktop_wait':
       return 'read'
     case 'computer_read_file':
       return 'read_file'
@@ -223,10 +250,18 @@ function targetLabel(
   element: SnapshotElement | undefined,
 ) {
   if (subject.filePath) return subject.filePath
+  if (subject.command) {
+    return subject.command.length > 160
+      ? `${subject.command.slice(0, 157)}...`
+      : subject.command
+  }
   if (subject.targetUrl) return hostOf(subject.targetUrl) || subject.targetUrl
   if (subject.tabId) return subject.tabId
   if (element?.name) return element.name
   if (subject.key) return subject.key
+  if (subject.x !== undefined && subject.y !== undefined) {
+    return `${subject.x}, ${subject.y}`
+  }
   return action.replace(/^computer_/, '').replaceAll('_', ' ')
 }
 
@@ -239,8 +274,21 @@ function auditTarget(
     page: auditUrl(pageUrl),
     ref: subject.ref ?? null,
     ...(subject.filePath ? { file: subject.filePath } : {}),
+    ...(subject.command ? { command: subject.command } : {}),
     ...(subject.key ? { key: subject.key } : {}),
     ...(subject.tabId ? { tab: subject.tabId } : {}),
+    ...(subject.button ? { button: subject.button } : {}),
+    ...(subject.characters !== undefined
+      ? { characters: subject.characters }
+      : {}),
+    ...(subject.deltaX !== undefined ? { deltaX: subject.deltaX } : {}),
+    ...(subject.deltaY !== undefined ? { deltaY: subject.deltaY } : {}),
+    ...(subject.durationMs !== undefined
+      ? { durationMs: subject.durationMs }
+      : {}),
+    ...(subject.points !== undefined ? { points: subject.points } : {}),
+    ...(subject.x !== undefined ? { x: subject.x } : {}),
+    ...(subject.y !== undefined ? { y: subject.y } : {}),
     ...(element
       ? {
           element: {
@@ -313,6 +361,38 @@ function safeOutcome(action: string, value: unknown): Record<string, unknown> {
       appended: result.appended,
     }
   }
+  if (action === 'computer_run_command') {
+    return {
+      exitCode: result.exitCode,
+      truncated: result.truncated,
+      timedOut: result.timedOut,
+      elapsedMs: result.elapsedMs,
+    }
+  }
+  if (action === 'computer_desktop_screenshot') {
+    return {
+      capturedAt: result.capturedAt,
+      height: result.height,
+      mimeType: result.mimeType,
+      width: result.width,
+    }
+  }
+  if (action.startsWith('computer_desktop_')) {
+    const screenshot =
+      result.screenshot && typeof result.screenshot === 'object'
+        ? (result.screenshot as Record<string, unknown>)
+        : {}
+    return {
+      action: result.action,
+      elapsedMs: result.elapsedMs,
+      screenshot: {
+        capturedAt: screenshot.capturedAt,
+        height: screenshot.height,
+        mimeType: screenshot.mimeType,
+        width: screenshot.width,
+      },
+    }
+  }
   return Object.fromEntries(
     ['action', 'url', 'elapsedMs', 'characters', 'submitted', 'key', 'deltaY']
       .filter((key) => result[key] !== undefined)
@@ -350,8 +430,7 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
   const policy = configuredPolicy()
   const transport: ComputerTransport = createComputerTransport({
     token,
-    allowPrivateHosts:
-      process.env.KHLOEI_COMPUTER_ALLOW_PRIVATE_HOSTS === 'true',
+    allowPrivateHosts: privateHostsAllowed(),
   })
   let currentPageUrl = options.initialState?.currentPageUrl ?? ''
   let snapshot = options.initialState?.snapshot
@@ -408,7 +487,7 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
       file: subject.filePath
         ? describeFile(subject.filePath)
         : { path: '', name: '', extension: '' },
-      command: '',
+      command: subject.command ?? '',
     }
     const decision = evaluateActionPolicy(policy, context)
     const recordedDecision = auditDecision(decision)
@@ -500,6 +579,39 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
     snapshot?.computerSessionId
       ? { ...input, computerSessionId: snapshot.computerSessionId }
       : input
+
+  const desktopToolName = (action: DesktopAction['action']) =>
+    `computer_desktop_${action}`
+
+  const desktopSubject = (input: DesktopAction): GovernedSubject => {
+    switch (input.action) {
+      case 'click':
+      case 'double_click':
+        return { button: input.button, x: input.x, y: input.y }
+      case 'move':
+        return { x: input.x, y: input.y }
+      case 'scroll':
+        return {
+          deltaX: input.deltaX,
+          deltaY: input.deltaY,
+          x: input.x,
+          y: input.y,
+        }
+      case 'type':
+        return { characters: input.text.length }
+      case 'keypress':
+        return { key: input.keys.join('+') }
+      case 'drag':
+        return {
+          button: input.button,
+          points: input.path.length,
+          x: input.path[0]?.x,
+          y: input.path[0]?.y,
+        }
+      case 'wait':
+        return { durationMs: input.durationMs }
+    }
+  }
 
   async function waitForPerson(
     done: (state: ControlState) => boolean,
@@ -845,6 +957,31 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
       return result
     },
 
+    async desktopScreenshot(activityId: string) {
+      const result = await govern<DesktopScreenshotResult>(
+        activityId,
+        'computer_desktop_screenshot',
+        {},
+        async () => {
+          const screenshot = await call<DesktopScreenshotResult>('/screenshot')
+          if (screenshot.url !== 'desktop://khloei') {
+            throw new Error('The full Linux desktop is not enabled.')
+          }
+          return screenshot
+        },
+      )
+      return result
+    },
+
+    desktopAction(input: DesktopAction, activityId: string) {
+      return govern<DesktopActionResult>(
+        activityId,
+        desktopToolName(input.action),
+        desktopSubject(input),
+        () => post<DesktopActionResult>('/desktop/action', input),
+      )
+    },
+
     listFiles(input: ListFilesInput, activityId: string) {
       return govern<ListFilesResult>(
         activityId,
@@ -869,6 +1006,23 @@ export function createKhloeiComputerGateway(options: GatewayOptions) {
         'computer_write_file',
         { filePath: input.path },
         () => post<WriteFileResult>('/files/write', input),
+      )
+    },
+
+    runCommand(input: RunCommandInput, activityId: string) {
+      return govern<RunCommandResult>(
+        activityId,
+        'computer_run_command',
+        { command: input.command },
+        () =>
+          transport.post<RunCommandResult>(
+            baseUrl,
+            botId,
+            '/exec',
+            input,
+            options.signal,
+            COMMAND_BACKSTOP_MS,
+          ),
       )
     },
 

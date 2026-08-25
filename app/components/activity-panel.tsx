@@ -106,6 +106,8 @@ function computerVerb(action: string) {
       return { active: 'Reading', complete: 'Read', noun: 'read' }
     case 'computer_write_file':
       return { active: 'Saving', complete: 'Saved', noun: 'save' }
+    case 'computer_run_command':
+      return { active: 'Running', complete: 'Ran', noun: 'run' }
     default:
       return { active: 'Using', complete: 'Used', noun: 'use' }
   }

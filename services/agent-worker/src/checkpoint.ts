@@ -1,6 +1,6 @@
 export const CHECKPOINT_KIND = 'khloei.agents-run-state'
 export const CHECKPOINT_FORMAT_VERSION = 1
-export const COMPUTER_AGENT_GRAPH_VERSION = 1
+export const COMPUTER_AGENT_GRAPH_VERSION = 2
 export const AGENTS_SDK_CHECKPOINT_VERSION = '0.17.0'
 
 type CheckpointEnvelope = {

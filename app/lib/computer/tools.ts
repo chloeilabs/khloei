@@ -9,6 +9,11 @@ import {
   ActionRefusedError,
   type KhloeiComputerGateway,
 } from './gateway'
+import type {
+  DesktopMouseButton,
+  DesktopPoint,
+  ScreenshotResult,
+} from './schema'
 
 export const KHLOEI_COMPUTER_TOOLS: FunctionTool[] = [
   {
@@ -267,6 +272,176 @@ export const KHLOEI_COMPUTER_TOOLS: FunctionTool[] = [
     },
     strict: true,
   },
+  {
+    type: 'function',
+    name: 'computer_run_command',
+    description:
+      "Run a non-interactive Bash command in Khloei's persistent workspace for coding, tests, and local file processing. Pipes, redirection, and && work. The command runs as an unprivileged container user, receives no deployment secrets, is time-bounded, and returns bounded stdout/stderr. It cannot be used to bypass a policy refusal.",
+    parameters: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: 'The exact command to run in the persistent workspace.',
+        },
+      },
+      required: ['command'],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  {
+    type: 'function',
+    name: 'computer_desktop_screenshot',
+    description:
+      "Capture Khloei's complete Linux desktop at full resolution. Use before any desktop coordinate action and after a person hands control back. Prefer browser refs, files, or shell when they can do the task reliably.",
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  {
+    type: 'function',
+    name: 'computer_desktop_click',
+    description:
+      'Click a visible point on the full Linux desktop. Coordinates must come from the latest desktop screenshot; never guess them.',
+    parameters: {
+      type: 'object',
+      properties: {
+        x: { type: 'number' },
+        y: { type: 'number' },
+        button: { type: 'string', enum: ['left', 'middle', 'right'] },
+      },
+      required: ['x', 'y', 'button'],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  {
+    type: 'function',
+    name: 'computer_desktop_double_click',
+    description:
+      'Double-click a visible point on the full Linux desktop using coordinates from the latest screenshot.',
+    parameters: {
+      type: 'object',
+      properties: {
+        x: { type: 'number' },
+        y: { type: 'number' },
+        button: { type: 'string', enum: ['left', 'middle', 'right'] },
+      },
+      required: ['x', 'y', 'button'],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  {
+    type: 'function',
+    name: 'computer_desktop_move',
+    description:
+      'Move Khloei\'s pointer to a visible desktop coordinate without clicking. Useful for hover-only native UI.',
+    parameters: {
+      type: 'object',
+      properties: { x: { type: 'number' }, y: { type: 'number' } },
+      required: ['x', 'y'],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  {
+    type: 'function',
+    name: 'computer_desktop_scroll',
+    description:
+      'Scroll at a visible point on the Linux desktop. Positive deltaY scrolls down; negative scrolls up.',
+    parameters: {
+      type: 'object',
+      properties: {
+        x: { type: 'number' },
+        y: { type: 'number' },
+        deltaX: { type: 'number' },
+        deltaY: { type: 'number' },
+      },
+      required: ['x', 'y', 'deltaX', 'deltaY'],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  {
+    type: 'function',
+    name: 'computer_desktop_type',
+    description:
+      'Type non-secret text into the currently focused native desktop control. Never type passwords, codes, payment data, API keys, or other secrets; request human help for those.',
+    parameters: {
+      type: 'object',
+      properties: { text: { type: 'string' } },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  {
+    type: 'function',
+    name: 'computer_desktop_keypress',
+    description:
+      'Press one key or a chord in a native Linux app. Examples: ["Enter"], ["Control","L"], ["Alt","F4"].',
+    parameters: {
+      type: 'object',
+      properties: {
+        keys: {
+          type: 'array',
+          items: { type: 'string' },
+          minItems: 1,
+          maxItems: 8,
+        },
+      },
+      required: ['keys'],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  {
+    type: 'function',
+    name: 'computer_desktop_drag',
+    description:
+      'Drag through 2-100 points on the full Linux desktop. Every point must come from the latest screenshot.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { x: { type: 'number' }, y: { type: 'number' } },
+            required: ['x', 'y'],
+            additionalProperties: false,
+          },
+          minItems: 2,
+          maxItems: 100,
+        },
+        button: { type: 'string', enum: ['left', 'middle', 'right'] },
+      },
+      required: ['path', 'button'],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
+  {
+    type: 'function',
+    name: 'computer_desktop_wait',
+    description:
+      'Wait briefly for a native app animation or load, then capture a fresh desktop screenshot.',
+    parameters: {
+      type: 'object',
+      properties: {
+        durationMs: { type: 'number', minimum: 100, maximum: 5000 },
+      },
+      required: ['durationMs'],
+      additionalProperties: false,
+    },
+    strict: true,
+  },
 ]
 
 const BROWSER_ACTIONS = new Set([
@@ -280,6 +455,18 @@ const BROWSER_ACTIONS = new Set([
   'computer_type',
   'computer_key',
   'computer_scroll',
+])
+
+const DESKTOP_ACTIONS = new Set([
+  'computer_desktop_screenshot',
+  'computer_desktop_click',
+  'computer_desktop_double_click',
+  'computer_desktop_move',
+  'computer_desktop_scroll',
+  'computer_desktop_type',
+  'computer_desktop_keypress',
+  'computer_desktop_drag',
+  'computer_desktop_wait',
 ])
 
 function argumentsObject(call: ResponseFunctionToolCall) {
@@ -343,8 +530,93 @@ function requiredBoolean(
   return value
 }
 
+function requiredDesktopButton(
+  args: Record<string, unknown>,
+  tool: string,
+): DesktopMouseButton {
+  const value = args.button
+  if (value !== 'left' && value !== 'middle' && value !== 'right') {
+    throw new Error(`${tool} requires a left, middle, or right button.`)
+  }
+  return value
+}
+
+function requiredKeys(args: Record<string, unknown>, tool: string) {
+  const value = args.keys
+  if (
+    !Array.isArray(value) ||
+    value.length < 1 ||
+    value.length > 8 ||
+    value.some(
+      (key) => typeof key !== 'string' || !key || key.length > 50,
+    )
+  ) {
+    throw new Error(`${tool} requires 1-8 usable key names.`)
+  }
+  return value as string[]
+}
+
+function requiredDesktopPath(
+  args: Record<string, unknown>,
+  tool: string,
+): DesktopPoint[] {
+  const value = args.path
+  if (!Array.isArray(value) || value.length < 2 || value.length > 100) {
+    throw new Error(`${tool} requires 2-100 coordinate points.`)
+  }
+  return value.map((point, index) => {
+    if (!point || typeof point !== 'object' || Array.isArray(point)) {
+      throw new Error(`${tool} point ${index + 1} must contain x and y.`)
+    }
+    const record = point as Record<string, unknown>
+    return {
+      x: requiredNumber(record, 'x', tool),
+      y: requiredNumber(record, 'y', tool),
+    }
+  })
+}
+
 export function isBrowserComputerTool(name: string) {
   return BROWSER_ACTIONS.has(name)
+}
+
+export function isDesktopComputerTool(name: string) {
+  return DESKTOP_ACTIONS.has(name)
+}
+
+export function desktopScreenshotFromToolOutcome(
+  name: string,
+  outcome: unknown,
+): ScreenshotResult | null {
+  if (
+    !isDesktopComputerTool(name) ||
+    !outcome ||
+    typeof outcome !== 'object' ||
+    !('ok' in outcome) ||
+    outcome.ok !== true ||
+    !('result' in outcome) ||
+    !outcome.result ||
+    typeof outcome.result !== 'object'
+  ) {
+    return null
+  }
+  const result = outcome.result as Record<string, unknown>
+  const value =
+    name === 'computer_desktop_screenshot'
+      ? result
+      : result.screenshot && typeof result.screenshot === 'object'
+        ? (result.screenshot as Record<string, unknown>)
+        : null
+  if (
+    !value ||
+    typeof value.base64 !== 'string' ||
+    typeof value.width !== 'number' ||
+    typeof value.height !== 'number' ||
+    typeof value.capturedAt !== 'string'
+  ) {
+    return null
+  }
+  return value as ScreenshotResult
 }
 
 export async function executeComputerTool(
@@ -473,6 +745,89 @@ export async function executeComputerTool(
           activityId,
         )
         break
+      case 'computer_run_command': {
+        const command = requiredString(args, 'command', call.name)
+        if (command.length > 20_000) {
+          throw new Error('computer_run_command command is too long.')
+        }
+        result = await gateway.runCommand({ command }, activityId)
+        break
+      }
+      case 'computer_desktop_screenshot':
+        result = await gateway.desktopScreenshot(activityId)
+        break
+      case 'computer_desktop_click':
+      case 'computer_desktop_double_click':
+        result = await gateway.desktopAction(
+          {
+            action:
+              call.name === 'computer_desktop_click'
+                ? 'click'
+                : 'double_click',
+            x: requiredNumber(args, 'x', call.name),
+            y: requiredNumber(args, 'y', call.name),
+            button: requiredDesktopButton(args, call.name),
+          },
+          activityId,
+        )
+        break
+      case 'computer_desktop_move':
+        result = await gateway.desktopAction(
+          {
+            action: 'move',
+            x: requiredNumber(args, 'x', call.name),
+            y: requiredNumber(args, 'y', call.name),
+          },
+          activityId,
+        )
+        break
+      case 'computer_desktop_scroll':
+        result = await gateway.desktopAction(
+          {
+            action: 'scroll',
+            x: requiredNumber(args, 'x', call.name),
+            y: requiredNumber(args, 'y', call.name),
+            deltaX: requiredNumber(args, 'deltaX', call.name),
+            deltaY: requiredNumber(args, 'deltaY', call.name),
+          },
+          activityId,
+        )
+        break
+      case 'computer_desktop_type': {
+        const text = requiredText(args, 'text', call.name)
+        if (text.length > 20_000) {
+          throw new Error('computer_desktop_type text is too long.')
+        }
+        result = await gateway.desktopAction({ action: 'type', text }, activityId)
+        break
+      }
+      case 'computer_desktop_keypress':
+        result = await gateway.desktopAction(
+          { action: 'keypress', keys: requiredKeys(args, call.name) },
+          activityId,
+        )
+        break
+      case 'computer_desktop_drag':
+        result = await gateway.desktopAction(
+          {
+            action: 'drag',
+            path: requiredDesktopPath(args, call.name),
+            button: requiredDesktopButton(args, call.name),
+          },
+          activityId,
+        )
+        break
+      case 'computer_desktop_wait': {
+        const durationMs = requiredNumber(args, 'durationMs', call.name)
+        if (durationMs < 100 || durationMs > 5_000) {
+          throw new Error('computer_desktop_wait must be between 100 and 5,000 milliseconds.')
+        }
+        result = await gateway.desktopAction(
+          { action: 'wait', durationMs },
+          activityId,
+        )
+        break
+      }
       default:
         throw new Error(`Khloei does not publish the tool ${call.name}.`)
     }

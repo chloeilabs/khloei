@@ -1,0 +1,119 @@
+# syntax=docker/dockerfile:1.7
+
+# The release tag is pinned so a rebuild cannot silently replace the desktop
+# underneath Khloei. Kasm's full desktop includes Xfce, KasmVNC, Chrome and
+# Firefox; this image adds the coding toolchain and Khloei's control service.
+# Bullseye's older glibc keeps the copied Node binary compatible with the
+# Ubuntu Jammy desktop base.
+FROM node:22-bullseye-slim@sha256:97924c8c7170c7a4c4464a281cc1f9569816496e546afbac17c4f2723397e116 AS node_runtime
+FROM oven/bun:1.3.11@sha256:0733e50325078969732ebe3b15ce4c4be5082f18c4ac1a0f0ca4839c2e4e42a7 AS bun_runtime
+FROM kasmweb/desktop:1.17.0@sha256:4c6f2f15cfe1d97f90011fed6ad6b2015b3bdbcfa4926306867deb73f8297269
+
+USER root
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HOME=/home/kasm-default-profile \
+    WORKSPACE_DIR=/data/workspace \
+    PROFILES_DIR=/data/profiles \
+    AUDIT_DIR=/data/audit \
+    KHLOEI_COMPUTER_SURFACE=desktop \
+    KHLOEI_COMPUTER_SHELL_ENABLED=true \
+    KHLOEI_DESKTOP_FRAME_RATE=30 \
+    KHLOEI_DESKTOP_JPEG_QUALITY=2 \
+    KHLOEI_DESKTOP_RESOLUTION=1920x1080 \
+    VNC_RESOLUTION=1920x1080 \
+    DISPLAY=:1 \
+    COMPUTER_CHROMIUM_EXECUTABLE=/usr/bin/google-chrome
+
+# ffmpeg captures the root X11 window for the existing scoped viewer socket;
+# xdotool applies human input only while the control state grants the wheel.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    apt-transport-https \
+    build-essential \
+    ca-certificates \
+    curl \
+    ffmpeg \
+    git \
+    gnupg \
+    jq \
+    less \
+    librsvg2-bin \
+    python3 \
+    python3-pip \
+    ripgrep \
+    xdotool \
+  && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+    | gpg --dearmor -o /usr/share/keyrings/microsoft-vscode.gpg \
+  && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-vscode.gpg] https://packages.microsoft.com/repos/code stable main" \
+    > /etc/apt/sources.list.d/vscode.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends code \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=bun_runtime /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=node_runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node_runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/bin/bun /usr/local/bin/bunx \
+  && ln -sf ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+  && ln -sf ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
+  && node --version \
+  && npm --version \
+  && test -x /usr/bin/google-chrome \
+  && test -x /dockerstartup/kasm_default_profile.sh \
+  && test -x /dockerstartup/vnc_startup.sh
+
+WORKDIR /app
+COPY services/computer/package.json services/computer/bun.lock ./
+RUN bun install --frozen-lockfile --production
+# The repository layout is mirrored rather than flattened so the service's
+# relative imports into `shared/` resolve identically in the image and the repo.
+COPY shared ./shared
+COPY services/computer/src ./services/computer/src
+
+# Replace the upstream background and default icon before Kasm seeds a user's
+# home. Infrastructure stays an implementation detail; the visible machine is
+# Khloei's.
+COPY services/computer/docker/khloei-wallpaper.svg /usr/share/backgrounds/khloei-wallpaper.svg
+RUN rsvg-convert -w 1920 -h 1080 \
+      /usr/share/backgrounds/khloei-wallpaper.svg \
+      -o /usr/share/backgrounds/bg_default.png \
+  && rsvg-convert -w 256 -h 256 \
+      /usr/share/backgrounds/khloei-wallpaper.svg \
+      -o /usr/share/extra/icons/icon_default.png
+
+COPY services/computer/docker/khloei-code.desktop /home/kasm-default-profile/Desktop/Khloei-Code.desktop
+COPY services/computer/docker/khloei-workspace.desktop /home/kasm-default-profile/Desktop/Khloei-Workspace.desktop
+COPY services/computer/docker/desktop-entrypoint.sh /dockerstartup/khloei-desktop-entrypoint.sh
+
+RUN chmod 0755 \
+      /dockerstartup/khloei-desktop-entrypoint.sh \
+      /home/kasm-default-profile/Desktop/Khloei-Code.desktop \
+      /home/kasm-default-profile/Desktop/Khloei-Workspace.desktop \
+  && mkdir -p /data/home /data/workspace /data/profiles /data/audit \
+  && rm -rf /home/kasm-user /workspace /profiles /audit \
+  && ln -s /data/home /home/kasm-user \
+  && ln -s /data/workspace /workspace \
+  && ln -s /data/profiles /profiles \
+  && ln -s /data/audit /audit \
+  && chown -R 1000:0 \
+      /app \
+      /data \
+      /home/kasm-default-profile \
+  && /dockerstartup/set_user_permission.sh /home/kasm-default-profile
+
+ENV HOME=/home/kasm-user \
+    PORT=4100
+
+VOLUME ["/data"]
+EXPOSE 4100 6901
+
+HEALTHCHECK --interval=5s --timeout=4s --start-period=45s --retries=12 \
+  CMD bun -e "const r = await fetch('http://127.0.0.1:4100/health'); const b = await r.json(); process.exit(r.ok && b.status === 'ok' && b.surface === 'desktop' && b.desktop?.ready && b.capabilities?.shell ? 0 : 1)"
+
+# The entrypoint begins as root only long enough to repair ownership on a newly attached or legacy
+# Railway volume. It then drops uid, groups, capabilities, and future privilege escalation before
+# either the desktop or command service starts.
+USER root
+WORKDIR /data/home
+ENTRYPOINT ["/dockerstartup/khloei-desktop-entrypoint.sh"]

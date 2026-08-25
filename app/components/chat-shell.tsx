@@ -21,6 +21,7 @@ import {
   writeActiveBackgroundChat,
   type ActiveBackgroundChat,
 } from '../lib/chat-background'
+import { normalizeComputerFrame } from '../lib/chat'
 import type {
   ChatActivity,
   ChatMessage as ChatMessageValue,
@@ -100,23 +101,8 @@ function streamEvent(value: unknown): ChatStreamEvent | null {
     }
   }
   if (event.type === 'computer-frame' && event.frame) {
-    const frame = event.frame as Record<string, unknown>
-    if (
-      typeof frame.capturedAt === 'string' &&
-      typeof frame.dataUrl === 'string' &&
-      frame.dataUrl.startsWith('data:image/png;base64,') &&
-      typeof frame.height === 'number' &&
-      typeof frame.width === 'number' &&
-      (frame.url === undefined || typeof frame.url === 'string')
-    ) {
-      return {
-        frame: event.frame as Extract<
-          ChatStreamEvent,
-          { type: 'computer-frame' }
-        >['frame'],
-        type: 'computer-frame',
-      }
-    }
+    const frame = normalizeComputerFrame(event.frame)
+    if (frame) return { frame, type: 'computer-frame' }
   }
   if (
     event.type === 'background' &&

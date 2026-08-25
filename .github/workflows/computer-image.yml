@@ -6,6 +6,10 @@ on:
     branches:
       - main
     paths:
+      # The service now reads the shared contract, so a change there must rebuild
+      # the image. Omitting it would let the app and the image drift apart
+      # silently, which is the exact failure the contract exists to surface.
+      - shared/**
       - services/computer/**
       - .github/workflows/computer-image.yml
 
@@ -42,23 +46,34 @@ jobs:
         run: bun run --cwd services/computer test
 
       - name: Build smoke image
-        run: docker build --file services/computer/Dockerfile --tag khloei-computer:smoke .
+        run: docker build --platform linux/amd64 --file services/computer/Dockerfile.desktop --tag khloei-computer:smoke .
 
       - name: Boot and verify smoke image
         run: |
-          docker run --detach --name khloei-computer-smoke --publish 4100:4100 --env COMPUTER_TOKEN=ci-computer-token khloei-computer:smoke
-          for attempt in {1..60}; do
-            if curl --fail --silent http://127.0.0.1:4100/health | jq --exit-status '.status == "ok" and (.computerSessionId | startswith("computer_"))' >/dev/null; then
+          docker run --detach --name khloei-computer-smoke --platform linux/amd64 --shm-size 2g --publish 4100:4100 --env COMPUTER_TOKEN=ci-computer-token khloei-computer:smoke
+          for attempt in {1..120}; do
+            if curl --fail --silent http://127.0.0.1:4100/health | jq --exit-status '.status == "ok" and .surface == "desktop" and .desktop.ready == true and .capabilities.shell == true and (.contract.version | type == "number") and (.computerSessionId | startswith("computer_"))' >/dev/null; then
               break
             fi
-            if [ "$attempt" -eq 60 ]; then
+            if [ "$attempt" -eq 120 ]; then
               docker logs khloei-computer-smoke
               exit 1
             fi
             sleep 1
           done
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:4100/control)" = "401"
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' --header 'Authorization: Bearer ci-computer-token' --request POST http://127.0.0.1:4100/exec)" = "404"
+          curl --fail --silent \
+            --header 'Authorization: Bearer ci-computer-token' \
+            --header 'Content-Type: application/json' \
+            --data '{"command":"printf shell-ok:; id -u; test -z \"$COMPUTER_TOKEN\""}' \
+            http://127.0.0.1:4100/exec \
+            | jq --exit-status '.exitCode == 0 and .stdout == "shell-ok:1000\n" and .timedOut == false' >/dev/null
+          test "$(docker inspect --format '{{.State.Health.Status}}' khloei-computer-smoke)" = "healthy"
+          # The image must implement the contract this commit's app expects, so a
+          # parity break is caught here rather than as degraded behaviour in production.
+          expected="$(grep -oE 'COMPUTER_CONTRACT_VERSION = [0-9]+' shared/computer-contract.ts | grep -oE '[0-9]+')"
+          curl --fail --silent http://127.0.0.1:4100/health \
+            | jq --exit-status --argjson expected "$expected" '.contract.version == $expected' >/dev/null
 
       - name: Stop smoke image
         if: always()
@@ -85,7 +100,7 @@ jobs:
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
-          file: services/computer/Dockerfile
+          file: services/computer/Dockerfile.desktop
           platforms: linux/amd64
           push: true
           provenance: true

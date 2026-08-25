@@ -6,6 +6,7 @@ import {
   MaxTurnsExceededError,
   OpenAIProvider,
   Runner,
+  type RunState,
   webSearchTool,
 } from '@openai/agents'
 import OpenAI from 'openai'
@@ -18,9 +19,10 @@ import type { ChatHistoryMessage } from './chat-history'
 import type { ChatModelId } from './chat-models'
 import type { ChatActivity, ChatStreamEvent } from './chat'
 import {
+  COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE,
   COMPUTER_AGENT_INSTRUCTIONS,
-  MAX_COMPUTER_AGENT_TURNS,
   computerAgentInput,
+  computerAgentTurnLimit,
   createComputerAgentTools,
   type ComputerAgentContext,
 } from '@/shared/computer-agent'
@@ -39,6 +41,7 @@ import {
   type ComputerGatewayProgress,
 } from './computer/gateway'
 import {
+  desktopScreenshotFromToolOutcome,
   executeComputerTool,
   isBrowserComputerTool,
 } from './computer/tools'
@@ -161,22 +164,32 @@ export function createComputerStreamResponse({
         const frameSource: {
           current?: ReturnType<typeof createKhloeiComputerGateway>
         } = {}
+        const publishFrame = (frame: {
+          base64: string
+          capturedAt: string
+          height: number
+          mimeType?: 'image/jpeg' | 'image/png'
+          url?: string
+          width: number
+        }) => {
+          if (frame.url === 'about:blank') return
+          send({
+            frame: {
+              capturedAt: frame.capturedAt,
+              dataUrl: `data:${frame.mimeType ?? 'image/png'};base64,${frame.base64}`,
+              height: frame.height,
+              url: publicBrowserUrl(frame.url),
+              width: frame.width,
+            },
+            type: 'computer-frame',
+          })
+        }
         const onBrowserAction = async () => {
           try {
             const gateway = frameSource.current
             if (!gateway) return
             const frame = await gateway.screenshot()
-            if (frame.url === 'about:blank') return
-            send({
-              frame: {
-                capturedAt: frame.capturedAt,
-                dataUrl: `data:image/png;base64,${frame.base64}`,
-                height: frame.height,
-                url: publicBrowserUrl(frame.url),
-                width: frame.width,
-              },
-              type: 'computer-frame',
-            })
+            publishFrame(frame)
           } catch {
             // The tool result still reaches the agent. A missing observational frame must not turn
             // a completed action into a failed action.
@@ -258,68 +271,108 @@ export function createComputerStreamResponse({
             if (outcome.ok && isBrowserComputerTool(name)) {
               await onBrowserAction()
             }
-            return JSON.stringify(outcome)
+            const desktopFrame = desktopScreenshotFromToolOutcome(name, outcome)
+            if (desktopFrame) publishFrame(desktopFrame)
+            return outcome
           },
         }
-        const run = await runner.run<typeof agent, ComputerAgentContext>(
-          agent,
-          computerAgentInput(history, content),
-          {
-            context: contextValue,
-            maxTurns: MAX_COMPUTER_AGENT_TURNS,
-            ...(provider === 'openai' && previousResponseId
-              ? { previousResponseId }
-              : {}),
-            signal,
-            stream: true,
-          },
+        let runInput:
+          | ReturnType<typeof computerAgentInput>
+          | RunState<ComputerAgentContext, typeof agent> = computerAgentInput(
+          history,
+          content,
         )
+        let turnLimit = computerAgentTurnLimit({ currentTurn: 0 })
+        let firstSegment = true
 
-        let terminal: OpenAIResponse | undefined
-        for await (const runEvent of run) {
-          if (!isOpenAIResponsesRawModelStreamEvent(runEvent)) continue
-          const event = runEvent.data.event
-          const activity = streamActivity(event, reasoningParts)
-          if (activity) send({ activity, type: 'activity' })
+        if (turnLimit === null) {
+          throw new Error(COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE)
+        }
 
-          if (event.type === 'response.output_text.delta') {
-            send({ delta: event.delta, type: 'text-delta' })
-          } else if (event.type === 'response.refusal.delta') {
-            send({ delta: event.delta, type: 'text-delta' })
-          } else if (
-            event.type === 'response.completed' ||
-            event.type === 'response.incomplete' ||
-            event.type === 'response.failed'
-          ) {
-            // The SDK may complete several function-call turns. The last raw response is the final
-            // response after it has executed all local tools.
-            terminal = event.response
-          } else if (event.type === 'error') {
-            throw new Error(event.message)
+        for (;;) {
+          const segmentInput:
+            | ReturnType<typeof computerAgentInput>
+            | RunState<ComputerAgentContext, typeof agent> = runInput
+          const run: Awaited<
+            ReturnType<
+              typeof runner.run<typeof agent, ComputerAgentContext>
+            >
+          > =
+            await runner.run<typeof agent, ComputerAgentContext>(
+              agent,
+              segmentInput,
+              {
+                context: contextValue,
+                maxTurns: turnLimit,
+                ...(firstSegment && provider === 'openai' && previousResponseId
+                  ? { previousResponseId }
+                  : {}),
+                signal,
+                stream: true,
+              },
+            )
+
+          let terminal: OpenAIResponse | undefined
+          try {
+            for await (const runEvent of run) {
+              if (!isOpenAIResponsesRawModelStreamEvent(runEvent)) continue
+              const event = runEvent.data.event
+              const activity = streamActivity(event, reasoningParts)
+              if (activity) send({ activity, type: 'activity' })
+
+              if (event.type === 'response.output_text.delta') {
+                send({ delta: event.delta, type: 'text-delta' })
+              } else if (event.type === 'response.refusal.delta') {
+                send({ delta: event.delta, type: 'text-delta' })
+              } else if (
+                event.type === 'response.completed' ||
+                event.type === 'response.incomplete' ||
+                event.type === 'response.failed'
+              ) {
+                // The SDK may complete several function-call turns. The last raw response is the
+                // final response after it has executed all local tools.
+                terminal = event.response
+              } else if (event.type === 'error') {
+                throw new Error(event.message)
+              }
+            }
+            await run.completed
+          } catch (error) {
+            if (error instanceof MaxTurnsExceededError) {
+              const nextTurnLimit = computerAgentTurnLimit(run.state.toJSON())
+              if (nextTurnLimit !== null && nextTurnLimit > turnLimit) {
+                // The SDK preserves the complete tool/result transcript in RunState. Resume that
+                // state with a cumulative ceiling so no completed action is repeated.
+                runInput = run.state
+                turnLimit = nextTurnLimit
+                firstSegment = false
+                continue
+              }
+            }
+            throw error
           }
-        }
-        await run.completed
 
-        if (!terminal) {
-          throw new Error('The Agents SDK response stream ended unexpectedly.')
-        }
-        for (const event of terminalChatEvents(terminal)) {
-          send(
-            event.type === 'message'
-              ? {
-                  ...event,
-                  content: normalizeComputerMarkdown(event.content),
-                }
-              : event,
-          )
+          if (!terminal) {
+            throw new Error('The Agents SDK response stream ended unexpectedly.')
+          }
+          for (const event of terminalChatEvents(terminal)) {
+            send(
+              event.type === 'message'
+                ? {
+                    ...event,
+                    content: normalizeComputerMarkdown(event.content),
+                  }
+                : event,
+            )
+          }
+          break
         }
         close()
       } catch (error) {
         if (!signal.aborted) {
           if (error instanceof MaxTurnsExceededError) {
             send({
-              message:
-                'Khloei stopped after the computer tool safety limit was reached. Start a new request to continue.',
+              message: COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE,
               type: 'error',
             })
           } else {

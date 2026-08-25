@@ -8,6 +8,13 @@ import {
   createComputerTransport,
   NavigationRefusedError,
 } from './client'
+import { privateHostsAllowed } from './config'
+import {
+  COMPUTER_CONTRACT_FEATURES,
+  COMPUTER_CONTRACT_VERSION,
+  evaluateComputerContract,
+  type ComputerSkew,
+} from '@/shared/computer-contract'
 import type {
   ControlState,
   SecretResult,
@@ -33,8 +40,7 @@ function computerConfiguration() {
   if (!token) throw new Error('COMPUTER_TOKEN is not configured on the server.')
 
   return {
-    allowPrivateHosts:
-      process.env.KHLOEI_COMPUTER_ALLOW_PRIVATE_HOSTS === 'true',
+    allowPrivateHosts: privateHostsAllowed(),
     baseUrl,
     botId:
       process.env.KHLOEI_COMPUTER_BOT_ID?.trim() ||
@@ -184,6 +190,82 @@ export async function supplyComputerSecret(text: string) {
     outcome: { characters: result.characters, supplied: result.supplied },
   })
   return result
+}
+
+export type ComputerDeploymentStatus = {
+  app: { contractVersion: number; features: string[] }
+  computer:
+    | {
+        capabilities?: unknown
+        contract?: unknown
+        desktop?: unknown
+        reachable: true
+        status?: unknown
+        surface?: unknown
+      }
+    | { error: string; reachable: false }
+  skew: ComputerSkew
+}
+
+/**
+ * Report what this app build expects against what the running computer answers.
+ *
+ * `/health` is deliberately the source: it is the one unauthenticated path, it
+ * names no Bot and touches no browser, so a parity check cannot itself become a
+ * way to reach into a computer. An unreachable computer is reported as such
+ * rather than thrown, because "cannot tell" and "mismatched" are different
+ * operational states and collapsing them hides one of them.
+ */
+export async function getComputerDeploymentStatus(
+  signal?: AbortSignal,
+): Promise<ComputerDeploymentStatus> {
+  const app = {
+    contractVersion: COMPUTER_CONTRACT_VERSION,
+    features: [...COMPUTER_CONTRACT_FEATURES],
+  }
+  const { baseUrl } = computerConfiguration()
+
+  let health: unknown
+  try {
+    const response = await fetch(new URL('/health', baseUrl), {
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+      signal: signal ?? AbortSignal.timeout(10_000),
+    })
+    health = await response.json()
+  } catch (error) {
+    const detail =
+      error instanceof Error ? error.message : 'The computer is unreachable.'
+    return {
+      app,
+      computer: { error: detail, reachable: false },
+      skew: {
+        compatible: false,
+        detail: `The computer could not be reached, so deployment parity is unknown: ${detail}`,
+        expectedVersion: COMPUTER_CONTRACT_VERSION,
+        missingFeatures: [],
+        reportedVersion: null,
+        severity: 'unknown',
+      },
+    }
+  }
+
+  const record =
+    typeof health === 'object' && health !== null && !Array.isArray(health)
+      ? (health as Record<string, unknown>)
+      : {}
+  return {
+    app,
+    computer: {
+      capabilities: record.capabilities,
+      contract: record.contract,
+      desktop: record.desktop,
+      reachable: true,
+      status: record.status,
+      surface: record.surface,
+    },
+    skew: evaluateComputerContract(health),
+  }
 }
 
 export function appRequestOrigin(request: Request) {

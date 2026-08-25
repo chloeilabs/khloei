@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Khloei Code
+Comment=Open Khloei's persistent coding workspace
+Exec=code --no-sandbox --disable-gpu-sandbox --new-window /workspace
+Icon=com.visualstudio.code
+Terminal=false
+Categories=Development;IDE;

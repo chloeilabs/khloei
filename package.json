@@ -1,6 +1,7 @@
 {
   "name": "khloei",
   "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,6 +10,10 @@
     "agent:test": "bun run --cwd services/agent-worker test",
     "agent:typecheck": "bun run --cwd services/agent-worker typecheck",
     "computer:dev": "bun --env-file=.env.local services/computer/src/local.ts",
+    "computer:desktop:build": "docker compose --env-file .env.local --file docker-compose.desktop.yml build",
+    "computer:desktop:up": "docker compose --env-file .env.local --file docker-compose.desktop.yml up --detach --build",
+    "computer:desktop:logs": "docker compose --env-file .env.local --file docker-compose.desktop.yml logs --follow computer",
+    "computer:desktop:down": "docker compose --env-file .env.local --file docker-compose.desktop.yml down",
     "computer:install": "bun install --cwd services/computer --frozen-lockfile",
     "computer:test": "bun run --cwd services/computer test",
     "computer:typecheck": "bun run --cwd services/computer typecheck",

@@ -16,7 +16,10 @@ WORKDIR /app
 COPY services/computer/package.json services/computer/bun.lock ./
 RUN bun install --frozen-lockfile
 
-COPY services/computer/src ./src
+# The repository layout is mirrored rather than flattened so the service's
+# relative imports into `shared/` resolve identically in the image and the repo.
+COPY shared ./shared
+COPY services/computer/src ./services/computer/src
 
 # Durable, separate data roots. Keeping the browser profile and audit chain out of the tool-visible
 # workspace prevents file tools from reading browser storage, session data, or their own audit.
@@ -32,4 +35,4 @@ EXPOSE 4100
 HEALTHCHECK --interval=2s --timeout=3s --start-period=2s --retries=30 \
   CMD bun -e "const r = await fetch('http://localhost:4100/health'); process.exit(r.ok ? 0 : 1)"
 
-CMD ["bun", "src/index.ts"]
+CMD ["bun", "services/computer/src/index.ts"]

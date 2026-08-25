@@ -294,6 +294,22 @@ export class AgentWorkerService {
         if (count < 250) break
       }
       if (removed > 0) this.store.optimize()
+
+      // Screenshot blobs are content-addressed and shared between actions, so
+      // they are not deleted with the task that cited them. Retention is the
+      // sweep: anything past its age, then oldest-first until the volume budget
+      // is met. A reference whose blob is gone rehydrates as unavailable.
+      const swept = this.store.screenshots?.sweep(now)
+      if (swept && swept.removedFiles > 0) {
+        console.info(
+          JSON.stringify({
+            removedBytes: swept.removedBytes,
+            removedFiles: swept.removedFiles,
+            totalBytes: swept.totalBytes,
+            type: 'khloei-screenshot-sweep',
+          }),
+        )
+      }
     }
   }
 

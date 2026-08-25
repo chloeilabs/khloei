@@ -1,8 +1,8 @@
+import { normalizeComputerFrame } from './chat'
 import type {
   ChatActivity,
   ChatAttachment,
   ChatComputerAction,
-  ChatComputerFrame,
   ChatMessage,
   ChatSource,
   ChatWebSearchAction,
@@ -154,32 +154,6 @@ function restoredActivity(value: unknown): ChatActivity | null {
   }
 }
 
-function restoredComputerFrame(value: unknown): ChatComputerFrame | undefined {
-  if (
-    !isRecord(value) ||
-    typeof value.capturedAt !== 'string' ||
-    typeof value.dataUrl !== 'string' ||
-    !value.dataUrl.startsWith('data:image/png;base64,') ||
-    typeof value.height !== 'number' ||
-    !Number.isFinite(value.height) ||
-    value.height <= 0 ||
-    typeof value.width !== 'number' ||
-    !Number.isFinite(value.width) ||
-    value.width <= 0 ||
-    (value.url !== undefined && typeof value.url !== 'string')
-  ) {
-    return undefined
-  }
-
-  return {
-    capturedAt: value.capturedAt,
-    dataUrl: value.dataUrl,
-    height: value.height,
-    width: value.width,
-    ...(typeof value.url === 'string' ? { url: value.url } : {}),
-  }
-}
-
 function restoredMessage(value: unknown): ChatMessage | null {
   if (
     !isRecord(value) ||
@@ -209,7 +183,7 @@ function restoredMessage(value: unknown): ChatMessage | null {
         .map(restoredAttachment)
         .filter((item): item is ChatAttachment => item !== null)
     : []
-  const computerFrame = restoredComputerFrame(value.computerFrame)
+  const computerFrame = normalizeComputerFrame(value.computerFrame)
   const sources = Array.isArray(value.sources)
     ? value.sources
         .map(restoredSource)

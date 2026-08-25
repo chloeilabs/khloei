@@ -136,6 +136,17 @@ function fixtureOutcome(invocation: ComputerToolInvocation) {
   }
   if (invocation.name === 'computer_list_files') return { entries: [] }
   if (invocation.name === 'computer_read_file') return { contents: 'fixture' }
+  if (invocation.name === 'computer_desktop_screenshot') {
+    return {
+      base64:
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      capturedAt: '2026-08-24T00:00:00.000Z',
+      height: 1,
+      mimeType: 'image/png',
+      url: 'desktop://khloei',
+      width: 1,
+    }
+  }
   return { ok: true }
 }
 
@@ -197,7 +208,7 @@ async function main() {
         durableHumanApprovals: false,
         executeTool: async (invocation) => {
           calls.push({ input: invocation.input, name: invocation.name })
-          return JSON.stringify(fixtureOutcome(invocation))
+          return { ok: true, result: fixtureOutcome(invocation) }
         },
         taskId: `eval_${testCase.id}`,
       }

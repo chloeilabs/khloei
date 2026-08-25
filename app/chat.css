@@ -909,6 +909,17 @@ html:has(.prompt-input-shell[data-docked]) {
   object-position: top center;
 }
 
+/* A transcript frame whose screenshot bytes have passed their retention window. */
+.computer-frame-image-expired {
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  text-align: balance;
+  font-size: 0.8125rem;
+  color: var(--muted-foreground);
+  background: var(--muted);
+}
+
 .computer-frame-secret {
   display: grid;
   gap: 0.4rem;

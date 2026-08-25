@@ -1,0 +1,9 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Khloei Workspace
+Comment=Open Khloei's persistent files
+Exec=thunar /workspace
+Icon=folder
+Terminal=false
+Categories=Utility;FileManager;

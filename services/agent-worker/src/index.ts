@@ -1,5 +1,15 @@
 import { timingSafeEqual } from 'node:crypto'
+import { dirname, resolve } from 'node:path'
 
+import {
+  COMPUTER_CONTRACT_FEATURES,
+  COMPUTER_CONTRACT_VERSION,
+} from '../../../shared/computer-contract'
+import {
+  createScreenshotStore,
+  DEFAULT_SCREENSHOT_MAX_AGE_MS,
+  DEFAULT_SCREENSHOT_MAX_BYTES,
+} from './screenshot-store'
 import { AgentWorkerService } from './service'
 import { TaskStore } from './store'
 import type { ComputerTaskRequest } from './types'
@@ -77,7 +87,39 @@ function taskRequest(value: unknown): ComputerTaskRequest | null {
   }
 }
 
-const store = new TaskStore(DB_PATH)
+function positiveNumber(name: string, fallback: number) {
+  const value = Number(process.env[name])
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+/**
+ * Screenshots live beside the database on the same durable volume, so a
+ * deployment that already persists the ledger persists their bytes too.
+ */
+const SCREENSHOT_DIR =
+  process.env.AGENT_WORKER_SCREENSHOT_DIR?.trim() ||
+  (DB_PATH === ':memory:'
+    ? resolve('.khloei/agent-worker/screenshots')
+    : resolve(dirname(DB_PATH), 'screenshots'))
+
+const screenshots = createScreenshotStore({
+  directory: SCREENSHOT_DIR,
+  maxAgeMs:
+    positiveNumber(
+      'AGENT_WORKER_SCREENSHOT_MAX_AGE_DAYS',
+      DEFAULT_SCREENSHOT_MAX_AGE_MS / (24 * 60 * 60 * 1_000),
+    ) *
+    24 *
+    60 *
+    60 *
+    1_000,
+  maxTotalBytes: positiveNumber(
+    'AGENT_WORKER_SCREENSHOT_MAX_BYTES',
+    DEFAULT_SCREENSHOT_MAX_BYTES,
+  ),
+})
+
+const store = new TaskStore(DB_PATH, screenshots)
 const service = new AgentWorkerService(store)
 service.start()
 
@@ -87,7 +129,31 @@ const server = Bun.serve({
   async fetch(request) {
     const url = new URL(request.url)
     if (url.pathname === '/health' && request.method === 'GET') {
-      return json({ durable: true, status: 'ok' })
+      const budget = store.screenshots?.stats()
+      return json({
+        contract: {
+          features: [...COMPUTER_CONTRACT_FEATURES],
+          version: COMPUTER_CONTRACT_VERSION,
+        },
+        durable: true,
+        // Storage pressure is reported rather than only logged: a worker that is
+        // sweeping screenshots faster than tasks finish is a capacity problem an
+        // operator has to be able to see without shelling into the volume.
+        screenshots: budget
+          ? {
+              directory: budget.directory,
+              files: budget.files,
+              maxAgeMs: budget.maxAgeMs,
+              maxTotalBytes: budget.maxTotalBytes,
+              totalBytes: budget.totalBytes,
+              usedFraction:
+                budget.maxTotalBytes > 0
+                  ? Number((budget.totalBytes / budget.maxTotalBytes).toFixed(4))
+                  : 0,
+            }
+          : null,
+        status: 'ok',
+      })
     }
     if (!authorized(request)) return json({ error: 'Unauthorized.' }, 401)
 
@@ -130,8 +196,10 @@ const server = Bun.serve({
 
 console.info(
   JSON.stringify({
+    contractVersion: COMPUTER_CONTRACT_VERSION,
     database: DB_PATH,
     port: server.port,
+    screenshots: SCREENSHOT_DIR,
     type: 'khloei-agent-worker-started',
   }),
 )

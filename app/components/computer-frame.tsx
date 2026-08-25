@@ -35,10 +35,18 @@ import { PromptGlass } from './prompt-glass'
 
 type LiveFrame = ChatComputerFrame & { url?: string }
 type ConnectionState = 'connecting' | 'live' | 'offline'
+type ComputerSurface = 'browser' | 'desktop'
 type StreamMessage =
   | { data: string; height: number; type: 'frame'; url?: string; width: number }
   | { control: ComputerControlState; type: 'control' }
   | ({ type: 'tabs' } & TabsResult)
+  | {
+      height?: number
+      label: string
+      surface: ComputerSurface
+      type: 'surface'
+      width?: number
+    }
   | { error: string; type: 'error' }
 
 type HumanTabAction =
@@ -105,8 +113,19 @@ function ComputerScreenImage({
 }: {
   alt: string
   imageRef: Ref<HTMLImageElement>
-  src: string
+  src?: string
 }) {
+  // A historical frame whose bytes have been swept by screenshot retention has
+  // no source. Rendering an empty src would show a broken image, so the slot
+  // keeps its geometry and says what happened. A live socket replaces this as
+  // soon as the first frame arrives.
+  if (!src) {
+    return (
+      <div className="computer-frame-image computer-frame-image-expired">
+        <span>This screenshot is past its retention window.</span>
+      </div>
+    )
+  }
   return (
     // Dynamic screencast frames intentionally bypass image optimization.
     // eslint-disable-next-line @next/next/no-img-element
@@ -134,12 +153,15 @@ export function ComputerFrame({
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState('')
   const [expanded, setExpanded] = useState(false)
+  const [surface, setSurface] = useState<ComputerSurface>('browser')
+  const [surfaceLabel, setSurfaceLabel] = useState('Khloei browser')
   const [tabsState, setTabsState] = useState<TabsResult | null>(null)
   const [tabBusy, setTabBusy] = useState(false)
   const streamFrameRef = useRef<LiveFrame>(frame)
   const screenImageRef = useRef<HTMLImageElement>(null)
   const lastFrameStateSyncRef = useRef(0)
   const socketRef = useRef<WebSocket | null>(null)
+  const binaryFrameUrlRef = useRef<string | null>(null)
   const controlRef = useRef<ComputerControlState | null>(null)
   const frameRef = useRef<HTMLElement>(null)
   const addressRef = useRef<HTMLInputElement>(null)
@@ -283,6 +305,7 @@ export function ComputerFrame({
         )
         if (!active) return
         socket = new WebSocket(session.streamUrl)
+        socket.binaryType = 'arraybuffer'
         socketRef.current = socket
         socket.addEventListener('open', () => {
           if (!active) return
@@ -292,6 +315,16 @@ export function ComputerFrame({
         })
         socket.addEventListener('message', (event) => {
           if (!active) return
+          if (event.data instanceof ArrayBuffer) {
+            const nextUrl = URL.createObjectURL(
+              new Blob([event.data], { type: 'image/jpeg' }),
+            )
+            const previousUrl = binaryFrameUrlRef.current
+            binaryFrameUrlRef.current = nextUrl
+            if (screenImageRef.current) screenImageRef.current.src = nextUrl
+            if (previousUrl) URL.revokeObjectURL(previousUrl)
+            return
+          }
           let message: StreamMessage
           try {
             message = JSON.parse(String(event.data)) as StreamMessage
@@ -309,15 +342,17 @@ export function ComputerFrame({
               return
             }
             const current = streamFrameRef.current
+            const dataUrl = `data:image/jpeg;base64,${message.data}`
             const next: LiveFrame = {
               ...current,
-              dataUrl: `data:image/jpeg;base64,${message.data}`,
+              dataUrl,
               height: message.height,
+              screenshotUnavailable: false,
               url: message.url ?? current.url,
               width: message.width,
             }
             streamFrameRef.current = next
-            if (screenImageRef.current) screenImageRef.current.src = next.dataUrl
+            if (screenImageRef.current) screenImageRef.current.src = dataUrl
 
             const now = Date.now()
             const metadataChanged =
@@ -341,6 +376,24 @@ export function ComputerFrame({
               maxTabs: message.maxTabs,
               tabs: message.tabs,
             })
+          } else if (message.type === 'surface') {
+            setSurface(message.surface)
+            setSurfaceLabel(message.label)
+            if (
+              Number.isFinite(message.height) &&
+              Number.isFinite(message.width) &&
+              (message.height ?? 0) > 0 &&
+              (message.width ?? 0) > 0
+            ) {
+              const current = streamFrameRef.current
+              const next = {
+                ...current,
+                height: message.height as number,
+                width: message.width as number,
+              }
+              streamFrameRef.current = next
+              setStreamFrame(next)
+            }
           } else {
             setNotice(message.error)
           }
@@ -383,6 +436,10 @@ export function ComputerFrame({
       }
       socket?.close()
       if (socketRef.current === socket) socketRef.current = null
+      if (binaryFrameUrlRef.current) {
+        URL.revokeObjectURL(binaryFrameUrlRef.current)
+        binaryFrameUrlRef.current = null
+      }
       window.removeEventListener('pagehide', releaseIfHeld)
       releaseIfHeld()
     }
@@ -397,7 +454,10 @@ export function ComputerFrame({
         const next = await responseJson<ComputerControlState>(
           await fetch('/api/computer/control', { cache: 'no-store' }),
         )
-        if (active) setControl(next)
+        if (active) {
+          controlRef.current = next
+          setControl(next)
+        }
       } catch (error) {
         if (active) {
           setNotice(
@@ -584,7 +644,8 @@ export function ComputerFrame({
   const activeTab = tabsState?.tabs.find(
     (tab) => tab.id === tabsState.activeTabId,
   )
-  const locationUrl = activeTab?.url ?? liveFrame.url
+  const locationUrl =
+    surface === 'desktop' ? surfaceLabel : activeTab?.url ?? liveFrame.url
   const tabsDisabled =
     !humanHasControl || tabBusy || connection !== 'live'
   const statusLabel =
@@ -619,9 +680,11 @@ export function ComputerFrame({
           </span>
           <span
             className="computer-frame-location"
-            title={frameLocation(locationUrl)}
+            title={
+              surface === 'desktop' ? surfaceLabel : frameLocation(locationUrl)
+            }
           >
-            {frameLocation(locationUrl)}
+            {surface === 'desktop' ? surfaceLabel : frameLocation(locationUrl)}
           </span>
         </figcaption>
 
@@ -679,7 +742,7 @@ export function ComputerFrame({
           </div>
         ) : null}
 
-        {isExpanded && tabsState ? (
+        {isExpanded && surface === 'browser' && tabsState ? (
           <div className="computer-frame-browser-chrome">
             <nav aria-label="Browser tabs" className="computer-frame-tabs">
               <div className="computer-frame-tab-list">
@@ -773,7 +836,7 @@ export function ComputerFrame({
         <div
           aria-label={
             humanHasControl
-              ? "Khloei's interactive computer. Mouse and keyboard input go to the browser."
+              ? `Khloei's interactive ${surface}. Mouse and keyboard input go to the ${surface}.`
               : undefined
           }
           className="computer-frame-screen"

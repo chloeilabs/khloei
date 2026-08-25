@@ -6,9 +6,22 @@ import {
   createComputerAuditLog,
   parseComputerAuditInput,
 } from "./audit";
+import {
+  COMPUTER_CONTRACT_FEATURES,
+  COMPUTER_CONTRACT_VERSION,
+} from "../../../shared/computer-contract";
 import { isOpenPath, matchesToken, offeredToken } from "./authorisation";
 import { isPlainBotId } from "./bot-id";
 import { prepareComputerDataDirectories } from "./data-directories";
+import {
+  captureDesktopScreenshot,
+  type DesktopFrameMessage,
+  type DesktopModelAction,
+  desktopReady,
+  performDesktopAction,
+  startDesktopScreencast,
+  synchronizeDesktopOperation,
+} from "./desktop-screencast";
 import {
   type Control,
   ControlError,
@@ -34,18 +47,25 @@ import {
   createComputerSessionId,
   StaleSnapshotError,
 } from "./snapshot-session";
+import { createShell } from "./shell";
+import {
+  COMPUTER_SURFACE,
+  DESKTOP_RESOLUTION,
+} from "./surface";
 import {
   createWorkspace,
   WorkspaceFileError,
   WorkspacePathError,
 } from "./workspace";
+import { isCurrentViewer } from "./viewer";
 import {
   createViewerSessions,
   normaliseViewerOrigin,
 } from "./viewer-sessions";
 
 /**
- * The Bot's computer: one long-lived browser, reachable over HTTP.
+ * The Bot's computer: a persistent browser by default, or that browser inside a complete Linux
+ * desktop when the desktop image selects `KHLOEI_COMPUTER_SURFACE=desktop`.
  *
  * Acting on a page lives in this process because only this process holds the browser. In the
  * intended deployment path, the server gateway decides whether an action may run and asks this
@@ -134,6 +154,8 @@ type BotSession = {
   control: Control;
   /** This Bot's snapshot generation. See the note above on staleness. */
   snapshotId: number;
+  /** Claims the viewer slot before its asynchronous screencast has finished starting. */
+  viewerSocket?: unknown;
   /** The one live screen viewer for this Bot, if a person is watching. */
   viewer?: {
     socket: { send(data: string): unknown };
@@ -161,7 +183,7 @@ const viewerSessions = createViewerSessions();
  */
 function forgetIdleSessions(): void {
   for (const [botId, session] of [...sessions.entries()]) {
-    if (session.viewer) continue;
+    if (session.viewer || session.viewerSocket) continue;
     if (profiles.isLive(botId)) continue;
     sessions.delete(botId);
   }
@@ -200,6 +222,13 @@ function botIdOf(request: Request, fallback?: string | null): string {
  */
 const dataDirectories = await prepareComputerDataDirectories();
 const workspace = createWorkspace(dataDirectories.workspace);
+const shell = createShell(dataDirectories.workspace);
+const SHELL_ENABLED =
+  process.env.KHLOEI_COMPUTER_SHELL_ENABLED?.trim() === "true";
+
+function shellAvailable(): boolean {
+  return SHELL_ENABLED && process.getuid?.() !== 0;
+}
 
 /**
  * Who has the wheel, as a state machine in its own module.
@@ -393,9 +422,28 @@ function browserTabId(value: unknown): string {
  * A second cast on the same page would have Chrome encoding every frame twice and both sockets acking
  * independently, which stalls both. One person drives; one cast.
  */
-async function stopViewer(session: BotSession): Promise<void> {
+async function stopViewer(
+  session: BotSession,
+  expectedSocket?: unknown,
+): Promise<void> {
+  if (
+    expectedSocket !== undefined &&
+    !isCurrentViewer(session.viewerSocket, expectedSocket)
+  ) {
+    return;
+  }
   const current = session.viewer;
   session.viewer = undefined;
+  session.viewerSocket = undefined;
+  if (current?.follow) clearInterval(current.follow);
+  await current?.cast.stop();
+}
+
+/** Claim the viewer slot synchronously, then stop the cast it replaced. */
+async function claimViewer(session: BotSession, socket: unknown): Promise<void> {
+  const current = session.viewer;
+  session.viewer = undefined;
+  session.viewerSocket = socket;
   if (current?.follow) clearInterval(current.follow);
   await current?.cast.stop();
 }
@@ -411,6 +459,21 @@ function sendControl(session: BotSession): void {
   }
 }
 
+/** Rebuild only the desktop capture so its baked cursor matches the current controller. */
+async function syncDesktopCursor(session: BotSession): Promise<void> {
+  if (COMPUTER_SURFACE !== "desktop") return;
+  try {
+    await session.viewer?.refresh();
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        type: "desktop-cursor-sync-error",
+        error: describe(error, "The desktop cursor mode could not be updated."),
+      }),
+    );
+  }
+}
+
 async function publishTabs(
   botId: string,
   session: BotSession,
@@ -423,6 +486,8 @@ async function publishTabs(
 
 /** How often the cast checks that it is still showing the page the Bot is on. */
 const FOLLOW_INTERVAL_MS = 1_000;
+/** Drop intermediate desktop frames before one slow viewer can exhaust service memory. */
+const MAX_VIEWER_BUFFER_BYTES = 2 * 1024 * 1024;
 
 /** What a live-screen socket carries: the Bot whose screen it is showing. */
 type StreamData = { botId: string };
@@ -441,16 +506,101 @@ serve<StreamData>({
     async open(ws) {
       const session = sessionFor(ws.data.botId);
       try {
-        await stopViewer(session);
+        await claimViewer(session, ws);
 
         const send = (frame: unknown) => {
           // A closed socket starts a fresh cast on the next connection.
           try {
-            ws.send(JSON.stringify(frame));
+            if (
+              (frame as { type?: unknown })?.type === "frame" &&
+              ws.getBufferedAmount() > MAX_VIEWER_BUFFER_BYTES
+            ) {
+              return;
+            }
+            const status = ws.send(JSON.stringify(frame));
+            if (status === 0 && isCurrentViewer(session.viewerSocket, ws)) {
+              void stopViewer(session, ws);
+            }
           } catch {
-            void stopViewer(session);
+            if (isCurrentViewer(session.viewerSocket, ws)) {
+              void stopViewer(session, ws);
+            }
           }
         };
+
+        const sendDesktopFrame = (frame: DesktopFrameMessage) => {
+          try {
+            if (ws.getBufferedAmount() > MAX_VIEWER_BUFFER_BYTES) return;
+            // JPEG bytes travel as a binary WebSocket frame. Base64 inside JSON made every frame
+            // roughly one third larger and forced two needless copies on both sides.
+            const status = ws.send(frame.data);
+            if (status === 0 && isCurrentViewer(session.viewerSocket, ws)) {
+              void stopViewer(session, ws);
+            }
+          } catch {
+            if (isCurrentViewer(session.viewerSocket, ws)) {
+              void stopViewer(session, ws);
+            }
+          }
+        };
+
+        send({
+          type: "surface",
+          surface: COMPUTER_SURFACE,
+          label:
+            COMPUTER_SURFACE === "desktop"
+              ? "Khloei Linux desktop"
+              : "Khloei browser",
+          ...(COMPUTER_SURFACE === "desktop" ? DESKTOP_RESOLUTION : {}),
+        });
+
+        if (COMPUTER_SURFACE === "desktop") {
+          // Starting the managed browser here makes Chrome part of the desktop immediately, while
+          // preserving the same profile and accessibility-tree tools the Bot already uses.
+          await currentPage(ws.data.botId);
+          let refreshQueue = Promise.resolve();
+          let refresh: () => Promise<void> = async () => undefined;
+          const attach = async () => {
+            if (!isCurrentViewer(session.viewerSocket, ws) || ws.readyState !== 1) {
+              return;
+            }
+            const previous = session.viewer;
+            const cast = await startDesktopScreencast(sendDesktopFrame, {
+              // The person's browser already renders its own pointer. Excluding the X11 cursor
+              // while they drive prevents a delayed remote cursor appearing beside it.
+              drawMouseCursor: !session.control.humanMayDrive(),
+              onError(error) {
+                send({
+                  type: "error",
+                  error: describe(error, "The desktop screen stream stopped."),
+                });
+                ws.close();
+              },
+            });
+            if (!isCurrentViewer(session.viewerSocket, ws) || ws.readyState !== 1) {
+              await cast.stop();
+              return;
+            }
+            session.viewer = {
+              socket: ws,
+              cast,
+              refresh,
+            };
+            // Start the replacement first so changing control never blanks the last desktop frame.
+            await previous?.cast.stop().catch(() => undefined);
+          };
+
+          refresh = () => {
+            refreshQueue = refreshQueue
+              .catch(() => undefined)
+              .then(attach);
+            return refreshQueue;
+          };
+
+          await refresh();
+          sendControl(session);
+          return;
+        }
 
         /*
          * The cast follows the active tab. Re-checking also discovers popups, title changes and a
@@ -461,12 +611,22 @@ serve<StreamData>({
         let refreshQueue = Promise.resolve();
         let refresh: () => Promise<void> = async () => undefined;
         const attach = async () => {
+          if (!isCurrentViewer(session.viewerSocket, ws) || ws.readyState !== 1) {
+            return;
+          }
           const target = await currentPage(ws.data.botId);
+          if (!isCurrentViewer(session.viewerSocket, ws) || ws.readyState !== 1) {
+            return;
+          }
           if (target === casting) return;
           const previous = session.viewer;
           const cast = await startScreencast(target, (frame) =>
             send({ ...frame, url: target.url() }),
           );
+          if (!isCurrentViewer(session.viewerSocket, ws) || ws.readyState !== 1) {
+            await cast.stop();
+            return;
+          }
           casting = target;
           session.viewer = {
             socket: ws,
@@ -494,11 +654,18 @@ serve<StreamData>({
         };
 
         await refresh();
+        if (!isCurrentViewer(session.viewerSocket, ws) || ws.readyState !== 1) {
+          return;
+        }
         sendControl(session);
         const follow = setInterval(() => {
           void refresh().catch(() => undefined);
         }, FOLLOW_INTERVAL_MS);
-        if (session.viewer) session.viewer.follow = follow;
+        if (session.viewer && isCurrentViewer(session.viewerSocket, ws)) {
+          session.viewer.follow = follow;
+        } else {
+          clearInterval(follow);
+        }
       } catch (error) {
         ws.send(
           JSON.stringify({
@@ -512,7 +679,16 @@ serve<StreamData>({
 
     async message(ws, raw) {
       const session = sessionFor(ws.data.botId);
-      if (!session.viewer) return;
+      const viewer = session.viewer;
+      // A superseded socket can close or deliver a buffered message after its replacement starts.
+      // It must never drive the replacement cast.
+      if (
+        !isCurrentViewer(session.viewerSocket, ws) ||
+        !isCurrentViewer(viewer?.socket, ws) ||
+        !viewer
+      ) {
+        return;
+      }
       let message: InputMessage;
       try {
         message = JSON.parse(String(raw)) as InputMessage;
@@ -529,7 +705,7 @@ serve<StreamData>({
         return;
       }
       try {
-        await session.viewer.cast.send(message);
+        await viewer.cast.send(message);
       } catch (error) {
         // Reported rather than swallowed. A dispatch that fails means the person's input did nothing,
         // and they must not be left believing it landed.
@@ -550,7 +726,11 @@ serve<StreamData>({
     },
 
     async close(ws) {
-      await stopViewer(sessionFor(ws.data.botId));
+      const session = sessionFor(ws.data.botId);
+      // Reconnects open the new socket before the old one closes. The old close must not stop the
+      // replacement viewer.
+      if (!isCurrentViewer(session.viewerSocket, ws)) return;
+      await stopViewer(session, ws);
     },
   },
   async fetch(request, server) {
@@ -779,7 +959,11 @@ serve<StreamData>({
     }
 
     if (url.pathname === "/control/take" && request.method === "POST") {
-      const control = session.control.take();
+      const control =
+        COMPUTER_SURFACE === "desktop"
+          ? await synchronizeDesktopOperation(() => session.control.take())
+          : session.control.take();
+      await syncDesktopCursor(session);
       sendControl(session);
       return json(control);
     }
@@ -787,7 +971,11 @@ serve<StreamData>({
     if (url.pathname === "/control/release" && request.method === "POST") {
       // `reason` is dropped on release: it described the thing the person was asked to do, and once
       // they have done it, leaving it set would have the surface still showing the old request.
-      const control = session.control.release();
+      const control =
+        COMPUTER_SURFACE === "desktop"
+          ? await synchronizeDesktopOperation(() => session.control.release())
+          : session.control.release();
+      await syncDesktopCursor(session);
       sendControl(session);
       return json(control);
     }
@@ -881,17 +1069,45 @@ serve<StreamData>({
 
     if (url.pathname === "/health") {
       const [profile] = profiles.summary([botId]);
-      return json({
-        status: "ok",
-        computerSessionId: COMPUTER_SESSION_ID,
-        // `browser` kept as it was: it is in the published contract and start.sh reads it.
-        browser: profile?.running ?? false,
-        profile,
-        // Which Bot this computer can prove it is, when the deployment runs SPIRE. Null is a
-        // deployment without it, not a failure, and it is reported rather than omitted so the
-        // difference between "no identity here" and "identity broken" is visible.
-        identity: await identity(),
-      });
+      const desktopIsReady =
+        COMPUTER_SURFACE === "desktop" ? await desktopReady() : undefined;
+      return json(
+        {
+          status: desktopIsReady === false ? "starting" : "ok",
+          surface: COMPUTER_SURFACE,
+          // What this image promises the app. Reported on the one unauthenticated
+          // path so an operator or orchestrator can see version skew without
+          // holding a secret, and so the app can name the difference precisely
+          // instead of discovering it as a missing field mid-action.
+          contract: {
+            features: [...COMPUTER_CONTRACT_FEATURES].filter(
+              (feature) =>
+                (feature !== "desktop-visual" || COMPUTER_SURFACE === "desktop") &&
+                (feature !== "desktop-shell" || shellAvailable()),
+            ),
+            version: COMPUTER_CONTRACT_VERSION,
+          },
+          capabilities: { shell: shellAvailable() },
+          ...(COMPUTER_SURFACE === "desktop"
+            ? {
+                desktop: {
+                  display: process.env.DISPLAY ?? ":1",
+                  ready: desktopIsReady,
+                  ...DESKTOP_RESOLUTION,
+                },
+              }
+            : {}),
+          computerSessionId: COMPUTER_SESSION_ID,
+          // `browser` kept as it was: it is in the published contract and start.sh reads it.
+          browser: profile?.running ?? false,
+          profile,
+          // Which Bot this computer can prove it is, when the deployment runs SPIRE. Null is a
+          // deployment without it, not a failure, and it is reported rather than omitted so the
+          // difference between "no identity here" and "identity broken" is visible.
+          identity: await identity(),
+        },
+        desktopIsReady === false ? 503 : 200,
+      );
     }
 
     /**
@@ -980,6 +1196,17 @@ serve<StreamData>({
 
     if (url.pathname === "/screenshot" && request.method === "GET") {
       try {
+        if (COMPUTER_SURFACE === "desktop") {
+          const buffer = await captureDesktopScreenshot("jpeg");
+          return json({
+            base64: buffer.toString("base64"),
+            width: DESKTOP_RESOLUTION.width,
+            height: DESKTOP_RESOLUTION.height,
+            capturedAt: new Date().toISOString(),
+            mimeType: "image/jpeg",
+            url: "desktop://khloei",
+          });
+        }
         const target = await currentPage(botId);
         const buffer = await target.screenshot({ type: "png" });
         const size = target.viewportSize() ?? { width: 1280, height: 800 };
@@ -988,6 +1215,7 @@ serve<StreamData>({
           width: size.width,
           height: size.height,
           capturedAt: new Date().toISOString(),
+          mimeType: "image/png",
           // Which page this is a picture of. A browser that has not been sent anywhere sits on
           // `about:blank`, and a screenshot of that is a valid, entirely white PNG, indistinguishable
           // from a real page to anything looking only at the bytes. The transcript needs to tell
@@ -1002,6 +1230,52 @@ serve<StreamData>({
           },
           502,
         );
+      }
+    }
+
+    /**
+     * Pixel-level model control of the full Linux desktop.
+     *
+     * The app gateway has already policy-decided and audited this operation.
+     * This inner boundary still enforces the bot/human lock so a model action
+     * can never land while the person has the wheel. Each action returns the
+     * exact resulting frame so vision does not act on stale pixels.
+     */
+    if (url.pathname === "/desktop/action" && request.method === "POST") {
+      if (COMPUTER_SURFACE !== "desktop") {
+        return json({ error: "The full Linux desktop is not enabled." }, 404);
+      }
+      const body = (await request.json().catch(() => null)) as DesktopModelAction | null;
+      if (!body || typeof body !== "object" || typeof body.action !== "string") {
+        return json({ error: "A desktop action is required." }, 400);
+      }
+      try {
+        session.control.assertBotMayAct();
+        const result = await performDesktopAction(
+          body,
+          request.signal,
+          () => session.control.assertBotMayAct(),
+        );
+        return json({
+          action: result.action,
+          elapsedMs: result.elapsedMs,
+          screenshot: {
+            base64: result.screenshot.toString("base64"),
+            width: DESKTOP_RESOLUTION.width,
+            height: DESKTOP_RESOLUTION.height,
+            capturedAt: new Date().toISOString(),
+            mimeType: "image/jpeg",
+            url: "desktop://khloei",
+          },
+        });
+      } catch (error) {
+        if (request.signal.aborted) {
+          return json({ error: "Stopped.", stopped: true }, 499);
+        }
+        if (error instanceof ControlError) {
+          return json({ error: error.message, humanHasControl: true }, 409);
+        }
+        return json({ error: describe(error, "The desktop action failed.") }, 400);
       }
     }
 
@@ -1035,6 +1309,53 @@ serve<StreamData>({
         return json(
           { error: describe(error, "The folder could not be listed.") },
           fileStatus(error),
+        );
+      }
+    }
+
+    /**
+     * A governed command in the persistent workspace.
+     *
+     * This endpoint is enabled only by the desktop image and refuses to run as root. The app gateway
+     * has already decided and durably audited the exact command before it reaches this boundary.
+     */
+    if (url.pathname === "/exec" && request.method === "POST") {
+      if (!SHELL_ENABLED) return json({ error: "Not found." }, 404);
+      if (!shellAvailable()) {
+        return json(
+          { error: "The command runner refuses to run as root." },
+          503,
+        );
+      }
+      const body = (await request.json().catch(() => null)) as {
+        command?: unknown;
+        timeoutMs?: unknown;
+      } | null;
+      if (
+        typeof body?.command !== "string" ||
+        !body.command.trim() ||
+        body.command.length > 20_000
+      ) {
+        return json({ error: "A command of at most 20,000 characters is required." }, 400);
+      }
+      try {
+        session.control.assertBotMayAct();
+        return json(
+          await shell.run({
+            command: body.command,
+            ...(typeof body.timeoutMs === "number"
+              ? { timeoutMs: body.timeoutMs }
+              : {}),
+            signal: request.signal,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof ControlError) {
+          return json({ error: error.message, humanHasControl: true }, 409);
+        }
+        return json(
+          { error: describe(error, "The command could not be run.") },
+          500,
         );
       }
     }
