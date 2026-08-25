@@ -113,10 +113,31 @@ jobs:
         if: vars.RAILWAY_AGENT_WORKER_DEPLOY_ENABLED == 'true'
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: >-
-          railway redeploy
-          --project 791f0f7b-cdb6-41db-b54e-7b3743300d74
-          --environment production
-          --service khloei-agent-worker
-          --from-source
-          --yes
+        run: |
+          railway redeploy \
+            --project 791f0f7b-cdb6-41db-b54e-7b3743300d74 \
+            --environment production \
+            --service khloei-agent-worker \
+            --from-source \
+            --yes
+
+          # `railway redeploy` returns as soon as the deployment is queued, so a
+          # deployment that later fails was still reported here as a success.
+          # That is exactly how a broken image reached production unnoticed:
+          # green workflow, failed rollout. Wait for Railway's own verdict.
+          for attempt in $(seq 1 90); do
+            status="$(railway deployment list --service khloei-agent-worker 2>/dev/null \
+              | sed -n '2p' | awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/,"",$2); print $2}')"
+            echo "Railway deployment status: ${status:-unknown}"
+            case "$status" in
+              SUCCESS) exit 0 ;;
+              FAILED|CRASHED|REMOVED)
+                echo "The Railway deployment reported $status."
+                railway logs --service khloei-agent-worker 2>&1 | tail -50 || true
+                exit 1
+                ;;
+            esac
+            sleep 20
+          done
+          echo "The Railway deployment did not settle within 30 minutes."
+          exit 1
