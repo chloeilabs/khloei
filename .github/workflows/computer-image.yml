@@ -121,7 +121,10 @@ jobs:
           done
           # The image must implement the contract this commit's app expects, so a
           # parity break is caught here rather than as degraded behaviour in production.
-          expected="$(grep -oE 'COMPUTER_CONTRACT_VERSION = [0-9]+' shared/computer-contract.ts | grep -oE '[0-9]+')"
+          # Anchored to the exported constant: an unanchored match also matches
+          # MINIMUM_COMPUTER_CONTRACT_VERSION, which made this two numbers and
+          # fed jq invalid JSON.
+          expected="$(grep -oE '^export const COMPUTER_CONTRACT_VERSION = [0-9]+' shared/computer-contract.ts | grep -oE '[0-9]+')"
           curl --fail --silent http://127.0.0.1:4100/health \
             | jq --exit-status --argjson expected "$expected" '.contract.version == $expected' >/dev/null
 
