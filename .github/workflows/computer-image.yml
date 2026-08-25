@@ -67,6 +67,9 @@ jobs:
 
       - name: Boot and verify smoke image
         run: |
+          # Trace every command: the previous two failures exited non-zero with no
+          # output at all, which said nothing about which command failed.
+          set -x
           # Report rather than assume: a container that dies on start otherwise
           # leaves nothing but a non-zero exit.
           if ! docker run --detach --name khloei-computer-smoke --platform linux/amd64 --shm-size 2g --publish 4100:4100 --env COMPUTER_TOKEN=ci-computer-token khloei-computer:smoke; then
