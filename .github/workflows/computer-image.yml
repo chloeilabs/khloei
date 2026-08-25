@@ -104,7 +104,21 @@ jobs:
             --data '{"command":"printf shell-ok:; id -u; test -z \"$COMPUTER_TOKEN\""}' \
             http://127.0.0.1:4100/exec \
             | jq --exit-status '.exitCode == 0 and .stdout == "shell-ok:1000\n" and .timedOut == false' >/dev/null
-          test "$(docker inspect --format '{{.State.Health.Status}}' khloei-computer-smoke)" = "healthy"
+          # The image's own HEALTHCHECK has a 45s start period and a 5s interval,
+          # so it reports "starting" for a while after the API is already
+          # answering. Wait for its verdict instead of demanding it immediately.
+          for attempt in {1..120}; do
+            health="$(docker inspect --format '{{.State.Health.Status}}' khloei-computer-smoke)"
+            if [ "$health" = "healthy" ]; then
+              break
+            fi
+            if [ "$health" = "unhealthy" ] || [ "$attempt" -eq 120 ]; then
+              echo "The smoke container healthcheck reported $health."
+              docker logs khloei-computer-smoke 2>&1 | tail -50 || true
+              exit 1
+            fi
+            sleep 1
+          done
           # The image must implement the contract this commit's app expects, so a
           # parity break is caught here rather than as degraded behaviour in production.
           expected="$(grep -oE 'COMPUTER_CONTRACT_VERSION = [0-9]+' shared/computer-contract.ts | grep -oE '[0-9]+')"
