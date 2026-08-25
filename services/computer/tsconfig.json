@@ -12,6 +12,6 @@
   },
   "include": [
     "src",
-    "../../shared"
+    "../../shared/computer-contract.ts"
   ]
 }
