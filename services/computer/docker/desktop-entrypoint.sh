@@ -75,6 +75,18 @@ configure_desktop_resolution() {
   done
   if [[ -z "$output" ]]; then
     echo "Khloei's X11 desktop did not become available within ${wait_seconds}s." >&2
+    # The polling loop discards xrandr's stderr, so a display that cannot be
+    # opened at all looks exactly like one that is merely slow. Report what
+    # xrandr actually says, once, along with enough context to tell "X never
+    # started" apart from "X started and we cannot reach it".
+    echo "--- desktop diagnosis ---" >&2
+    xrandr --display "${DISPLAY:-:1}" --query >&2 2>&1 || true
+    echo "X sockets: $(ls -1 /tmp/.X11-unix 2>&1 | tr '\n' ' ')" >&2
+    echo "XAUTHORITY=${XAUTHORITY:-unset} DISPLAY=${DISPLAY:-unset} HOME=${HOME:-unset}" >&2
+    echo "Xvnc processes: $(pgrep -a -f 'Xvnc|Xtigervnc' 2>&1 | head -3 | tr '\n' ' ')" >&2
+    echo "vnc logs: $(ls -1 "${HOME:-/home/kasm-user}"/.vnc/*.log 2>&1 | tr '\n' ' ')" >&2
+    tail -n 25 "${HOME:-/home/kasm-user}"/.vnc/*.log >&2 2>&1 || true
+    echo "--- end desktop diagnosis ---" >&2
     return 1
   fi
   echo "Khloei's X11 desktop became available after $(( SECONDS - started_at ))s." >&2
