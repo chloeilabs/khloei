@@ -59,17 +59,25 @@ configure_desktop_resolution() {
   local width="${BASH_REMATCH[1]}"
   local height="${BASH_REMATCH[2]}"
 
+  # X can take considerably longer to come up on a cold cloud host than on a
+  # warm developer machine: the image is large, the disk is slower, and nothing
+  # is cached. Waiting only 30s made the container kill itself mid-startup and
+  # crash-loop until the platform healthcheck gave up, which reported as a
+  # deployment failure with no obvious cause.
+  local wait_seconds="${KHLOEI_DESKTOP_STARTUP_TIMEOUT_SECONDS:-300}"
+  local started_at="$SECONDS"
   local output=""
-  for _ in {1..60}; do
+  while (( SECONDS - started_at < wait_seconds )); do
     output="$(xrandr --display "${DISPLAY:-:1}" --query 2>/dev/null \
       | awk '$2 == "connected" { print $1; exit }')"
     [[ -n "$output" ]] && break
     sleep 0.5
   done
   if [[ -z "$output" ]]; then
-    echo "Khloei's X11 desktop did not become available." >&2
+    echo "Khloei's X11 desktop did not become available within ${wait_seconds}s." >&2
     return 1
   fi
+  echo "Khloei's X11 desktop became available after $(( SECONDS - started_at ))s." >&2
 
   # KasmVNC 1.17 starts at 1024x768 even when VNC_RESOLUTION is supplied.
   # Add the requested mode explicitly so capture dimensions and pointer
