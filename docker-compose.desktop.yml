@@ -2,10 +2,11 @@ name: khloei-desktop
 
 services:
   computer:
-    # The desktop image is built for amd64; Docker Desktop emulates it on
-    # Apple Silicon. No shm_size is set: Xvfb does not need one, and Railway
-    # cannot configure it, so local runs match production constraints.
-    platform: linux/amd64
+    # No platform is pinned, so a developer machine builds and runs the desktop
+    # natively. Emulating amd64 on arm64 made every input event pay process
+    # translation, which is felt directly as lag while driving the desktop.
+    # No shm_size is set either: Xvfb does not need one, and Railway cannot
+    # configure it, so local runs match production constraints.
     build:
       context: .
       dockerfile: services/computer/Dockerfile.desktop

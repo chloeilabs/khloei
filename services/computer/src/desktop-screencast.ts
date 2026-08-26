@@ -218,9 +218,44 @@ async function runXdotool(args: string[]): Promise<void> {
   }
 }
 
-async function applyDesktopInput(message: InputMessage): Promise<void> {
+/**
+ * Chain commands into as few xdotool invocations as possible.
+ *
+ * Spawning a process for every pointer move dominates input latency: each spawn
+ * costs far more than the X request it carries, and they are serialized, so a
+ * fast drag pays the cost once per sample. xdotool accepts chained commands in
+ * one invocation, which collapses a burst into a single spawn.
+ *
+ * `type ... -- <text>` is the exception. Everything after `--` belongs to the
+ * typed string, so a chained command following it would be typed rather than
+ * run. Those get an invocation of their own, and the surrounding order is
+ * preserved.
+ */
+export function batchXdotoolCommands(commands: string[][]): string[][] {
+  const batches: string[][] = [];
+  let current: string[] = [];
+  for (const command of commands) {
+    if (command[0] === "type") {
+      if (current.length > 0) {
+        batches.push(current);
+        current = [];
+      }
+      batches.push(command);
+      continue;
+    }
+    current.push(...command);
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+async function runXdotoolBatches(commands: string[][]): Promise<void> {
+  for (const batch of batchXdotoolCommands(commands)) await runXdotool(batch);
+}
+
+async function applyDesktopInput(messages: InputMessage[]): Promise<void> {
   await enqueueDesktopOperation(async () => {
-    for (const args of desktopInputCommands(message)) await runXdotool(args);
+    await runXdotoolBatches(messages.flatMap((m) => desktopInputCommands(m)));
   });
 }
 
@@ -517,16 +552,16 @@ export function performDesktopAction(
         signal?.addEventListener("abort", aborted, { once: true });
       });
     } else {
-      let dragging = false;
       try {
-        for (const args of commands) {
+        for (const batch of batchXdotoolCommands(commands)) {
           if (signal?.aborted) throw new DOMException("Stopped.", "AbortError");
-          await runXdotool(args);
-          if (args[0] === "mousedown") dragging = true;
-          if (args[0] === "mouseup") dragging = false;
+          await runXdotool(batch);
         }
       } finally {
-        if (dragging && action.action === "drag") {
+        // A drag that failed part-way must not leave the button held down. The
+        // release is idempotent, so it is issued whenever a drag ends by any
+        // path rather than tracked across a batched invocation.
+        if (action.action === "drag") {
           await runXdotool(["mouseup", mouseButton(action.button)]).catch(
             () => undefined,
           );
@@ -673,8 +708,10 @@ export async function startDesktopScreencast(
         inputDrain = (async () => {
           try {
             while (!stopped && queuedInputs.length > 0) {
-              const next = queuedInputs.shift();
-              if (next) await applyDesktopInput(next);
+              // Drain everything queued into one batch: a burst of pointer
+              // samples then costs a single spawn instead of one apiece.
+              const pending = queuedInputs.splice(0, queuedInputs.length);
+              await applyDesktopInput(pending);
             }
           } catch (error) {
             // Do not let one failed X11 action poison every later interaction.

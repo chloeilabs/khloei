@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  batchXdotoolCommands,
   desktopActionCommands,
   desktopCaptureCommand,
   desktopInputCommands,
@@ -88,6 +89,48 @@ describe("desktop cursor capture", () => {
     ]);
   });
 });
+
+describe("xdotool batching", () => {
+  test("chains a burst of pointer samples into one invocation", () => {
+    // Every spawn costs far more than the X request it carries, so a drag that
+    // spawned once per sample was paying that cost dozens of times.
+    expect(
+      batchXdotoolCommands([
+        ["mousemove", "10", "20"],
+        ["mousedown", "1"],
+        ["mousemove", "--sync", "30", "40"],
+        ["mouseup", "1"],
+      ]),
+    ).toEqual([
+      [
+        "mousemove", "10", "20",
+        "mousedown", "1",
+        "mousemove", "--sync", "30", "40",
+        "mouseup", "1",
+      ],
+    ])
+  })
+
+  test("keeps typed text in its own invocation and preserves order", () => {
+    // Everything after `--` belongs to the typed string, so a command chained
+    // after it would be typed rather than run.
+    expect(
+      batchXdotoolCommands([
+        ["mousemove", "5", "5"],
+        ["type", "--clearmodifiers", "--delay", "1", "--", "hi"],
+        ["key", "--clearmodifiers", "Return"],
+      ]),
+    ).toEqual([
+      ["mousemove", "5", "5"],
+      ["type", "--clearmodifiers", "--delay", "1", "--", "hi"],
+      ["key", "--clearmodifiers", "Return"],
+    ])
+  })
+
+  test("returns nothing for nothing", () => {
+    expect(batchXdotoolCommands([])).toEqual([])
+  })
+})
 
 describe("desktop input", () => {
   test("serializes control handovers behind in-flight desktop input", async () => {

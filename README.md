@@ -136,9 +136,19 @@ Xvfb needs no display hardware and no elevated capabilities, is given its
 geometry at startup so no mode-setting is required, and brings the image to
 about 1 GB with the display ready in roughly two seconds.
 
-The pinned full-desktop image is currently amd64. Docker Desktop can emulate it
-on Apple Silicon, but a native amd64 Linux host will have lower input and video
-latency. The default desktop is 1920×1080 at 30 frames per second with
+The desktop image builds for both amd64 and arm64, so a developer machine runs
+it natively. Google publishes Chrome and Microsoft publishes VS Code for amd64
+only, so arm64 installs Debian's Chromium instead: the same engine Playwright
+drives. This matters for feel rather than throughput. Every input event runs an
+xdotool command, and under amd64 emulation on Apple Silicon each one cost about
+348 ms against roughly 3 ms natively, which is experienced directly as lag while
+driving the desktop. Input events are also chained into a single xdotool
+invocation per burst rather than one apiece.
+
+Interactive latency is otherwise dominated by distance to the host: a round trip
+to a computer in another continent adds well over 100 ms to every action. Deploy
+the computer near whoever drives it. The default desktop is 1920×1080 at 30
+frames per second with
 maximum-quality JPEG encoding. Frames
 travel as binary WebSocket messages rather than base64-in-JSON, and stale frames
 are dropped when a viewer is slow rather than accumulating memory. Override
@@ -313,7 +323,7 @@ Railway's build workers while Railway continues to own the runtime and volume.
 The equivalent local build is:
 
 ```bash
-docker build --platform linux/amd64 -f services/computer/Dockerfile.desktop -t khloei-computer .
+docker build -f services/computer/Dockerfile.desktop -t khloei-computer .
 ```
 
 [`services/computer/Dockerfile`](./services/computer/Dockerfile) still builds the
