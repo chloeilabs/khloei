@@ -1,11 +1,10 @@
 /**
- * Full Linux desktop capture and input for the KasmVNC/Xfce image.
+ * Full Linux desktop capture and input for the Xvfb/Xfce image.
  *
- * KasmVNC owns the Xfce session inside the image, while the default deployment
- * leaves its port unpublished. Khloei's app deliberately keeps using the
- * existing scoped viewer socket. That preserves the one-use viewer credential
- * and the bot/human control lock instead of exposing a second unaudited control
- * path to the React surface.
+ * The display is a plain headless X server and the session is Xfce. Khloei
+ * captures the root window here and streams it over the app's own scoped viewer
+ * socket, which preserves the one-use viewer credential and the bot/human
+ * control lock rather than exposing a second unaudited control path.
  */
 import type {
   FrameMessage,
@@ -201,7 +200,7 @@ async function runXdotool(args: string[]): Promise<void> {
   const process = Bun.spawn(["xdotool", ...args], {
     env: {
       DISPLAY: DESKTOP_DISPLAY,
-      HOME: Bun.env.HOME ?? "/home/kasm-user",
+      HOME: Bun.env.HOME ?? "/home/khloei",
       PATH: Bun.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
       ...(Bun.env.XAUTHORITY ? { XAUTHORITY: Bun.env.XAUTHORITY } : {}),
     },
@@ -351,7 +350,7 @@ export async function desktopGeometry(): Promise<string | null> {
  * Enough about the X server to tell apart the ways it can be missing.
  *
  * A null geometry says only that the display could not be read. Whether an X
- * socket exists, and whether an Xvnc process is alive, separates "the desktop
+ * socket exists, and whether an X server process is alive, separates "the desktop
  * never started" from "it started and this process cannot reach it" -- which
  * are different bugs with different fixes. Neither value is sensitive: it is a
  * socket name and a process count.
@@ -361,16 +360,16 @@ export async function desktopDiagnostics(): Promise<{
   homeWritable: boolean;
   sockets: string[];
   uid: number | null;
-  vncProcesses: number;
-  vncStateWritable: boolean;
+  displayProcesses: number;
+  displayStateWritable: boolean;
 }> {
   const sockets = await Array.fromAsync(
     new Bun.Glob("*").scan({ cwd: "/tmp/.X11-unix", onlyFiles: false }),
   ).catch(() => [] as string[]);
 
-  let vncProcesses = 0;
+  let displayProcesses = 0;
   try {
-    const process = Bun.spawn(["pgrep", "-c", "-f", "Xvnc|Xtigervnc"], {
+    const process = Bun.spawn(["pgrep", "-c", "-f", "Xvfb"], {
       stdout: "pipe",
       stderr: "ignore",
     });
@@ -380,7 +379,7 @@ export async function desktopDiagnostics(): Promise<{
         process.exited,
         new Response(process.stdout).text(),
       ]);
-      vncProcesses = Number.parseInt(output.trim(), 10) || 0;
+      displayProcesses = Number.parseInt(output.trim(), 10) || 0;
     } finally {
       clearTimeout(timeout);
     }
@@ -393,7 +392,7 @@ export async function desktopDiagnostics(): Promise<{
   // by the privileged first pass of the entrypoint, so a runtime that starts
   // the container unprivileged leaves the desktop unable to start while every
   // other tool keeps working. Probe it rather than infer it.
-  const home = Bun.env.HOME ?? "/home/kasm-user";
+  const home = Bun.env.HOME ?? "/home/khloei";
   const canWrite = async (directory: string) => {
     const probe = `${directory}/.khloei-write-probe-${process.pid}`;
     try {
@@ -410,8 +409,8 @@ export async function desktopDiagnostics(): Promise<{
     homeWritable: await canWrite(home),
     sockets,
     uid: process.getuid?.() ?? null,
-    vncProcesses,
-    vncStateWritable: await canWrite(`${home}/.vnc`),
+    displayProcesses,
+    displayStateWritable: await canWrite(`${home}/.cache`),
   };
 }
 

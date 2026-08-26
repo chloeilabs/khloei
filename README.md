@@ -92,14 +92,13 @@ npm run dev
 Open [http://localhost:3000](http://localhost:3000), then select **Computer
 Use** from the Skills menu.
 
-## Linux desktop prototype
+## Linux desktop
 
 Khloei can replace the lightweight headless computer service with a persistent
-Xfce Linux desktop containing Chrome, Firefox, Terminal, Files, Git, Python,
-Node.js, Bun, ripgrep, and VS Code. It uses the same scoped live viewer, explicit
-human takeover, persistent browser profile, workspace, and audit API as browser
-mode, so the React app never receives `COMPUTER_TOKEN` or a general-purpose VNC
-credential.
+Xfce Linux desktop containing Chrome, Terminal, Files, Git, Python, Node.js,
+Bun, ripgrep, and VS Code. It uses the same scoped live viewer, explicit human
+takeover, persistent browser profile, workspace, and audit API as browser mode,
+so the React app never receives `COMPUTER_TOKEN`.
 
 Install Docker Desktop, keep the normal `COMPUTER_TOKEN` and computer URLs in
 `.env.local`, and start the desktop instead of `npm run computer:dev`:
@@ -124,10 +123,18 @@ npm run computer:desktop:down
 
 The Compose project retains separate named volumes for the Linux home,
 workspace, browser profiles, and audit chain across ordinary stop/start or
-container replacement. Port 4100 is bound only to loopback. KasmVNC runs inside
-the container to own the Xfce session, but its port is not published; its
-internal password is randomly generated at startup and is not part of the
-Khloei UI.
+container replacement. Port 4100 is bound only to loopback.
+
+The display is [Xvfb](https://www.x.org/releases/current/doc/man/man1/Xvfb.1.xhtml),
+the ordinary headless X server, not a VNC server. Khloei captures the X root
+window with ffmpeg and injects input with xdotool, and a person watches through
+the app's own scoped viewer socket, so a VNC stack was never on the path: it
+only ever supplied an X server and an Xfce session. Carrying one cost a 7.5 GB
+image, a multi-minute cold start, and a dependency on privileges that sandboxed
+container runtimes withhold, where its X server silently never started at all.
+Xvfb needs no display hardware and no elevated capabilities, is given its
+geometry at startup so no mode-setting is required, and brings the image to
+about 1 GB with the display ready in roughly two seconds.
 
 The pinned full-desktop image is currently amd64. Docker Desktop can emulate it
 on Apple Silicon, but a native amd64 Linux host will have lower input and video

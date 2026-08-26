@@ -16,7 +16,6 @@ services:
       KHLOEI_DESKTOP_FRAME_RATE: "30"
       KHLOEI_DESKTOP_JPEG_QUALITY: "2"
       KHLOEI_DESKTOP_RESOLUTION: 1920x1080
-      VNC_RESOLUTION: 1920x1080
     init: true
     ports:
       # The app's audited API and scoped viewer stream.

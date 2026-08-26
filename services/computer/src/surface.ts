@@ -26,7 +26,7 @@ const DEFAULT_DESKTOP_FRAME_RATE = 30;
 const DEFAULT_DESKTOP_JPEG_QUALITY = 2;
 
 /**
- * Parse Kasm's WIDTHxHEIGHT setting while keeping screen capture bounded.
+ * Parse the WIDTHxHEIGHT setting while keeping screen capture bounded.
  *
  * The lower bound prevents a malformed value from creating a useless desktop;
  * the upper bound avoids accidentally asking ffmpeg and the model to process an
