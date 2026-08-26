@@ -317,8 +317,15 @@ export function desktopActionCommands(
   throw new Error("That desktop action is not supported.");
 }
 
-/** True only after Xfce's X display has the exact geometry our frames advertise. */
-export async function desktopReady(): Promise<boolean> {
+/**
+ * What geometry the X display actually reports, or null when it cannot be read.
+ *
+ * Returned rather than compared away: "the desktop is not ready" is far less
+ * useful to whoever has to fix it than "the desktop is 1024x768 and we expect
+ * 1920x1080", and on a host whose logs are rotated the difference is the only
+ * thing that reaches an operator.
+ */
+export async function desktopGeometry(): Promise<string | null> {
   try {
     const process = Bun.spawn(["xdotool", "getdisplaygeometry"], {
       env: { ...Bun.env, DISPLAY: DESKTOP_DISPLAY },
@@ -331,16 +338,23 @@ export async function desktopReady(): Promise<boolean> {
         process.exited,
         new Response(process.stdout).text(),
       ]);
-      return (
-        code === 0 &&
-        output.trim() === `${DESKTOP_RESOLUTION.width} ${DESKTOP_RESOLUTION.height}`
-      );
+      return code === 0 ? output.trim() || null : null;
     } finally {
       clearTimeout(timeout);
     }
   } catch {
-    return false;
+    return null;
   }
+}
+
+/** The geometry our frames and pointer coordinates advertise. */
+export function expectedDesktopGeometry(): string {
+  return `${DESKTOP_RESOLUTION.width} ${DESKTOP_RESOLUTION.height}`;
+}
+
+/** True only after Xfce's X display has the exact geometry our frames advertise. */
+export async function desktopReady(): Promise<boolean> {
+  return (await desktopGeometry()) === expectedDesktopGeometry();
 }
 
 export function desktopCaptureCommand(

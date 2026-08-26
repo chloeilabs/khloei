@@ -17,7 +17,8 @@ import {
   captureDesktopScreenshot,
   type DesktopFrameMessage,
   type DesktopModelAction,
-  desktopReady,
+  desktopGeometry,
+  expectedDesktopGeometry,
   performDesktopAction,
   startDesktopScreencast,
   synchronizeDesktopOperation,
@@ -1069,8 +1070,15 @@ serve<StreamData>({
 
     if (url.pathname === "/health") {
       const [profile] = profiles.summary([botId]);
+      // The observed geometry is reported alongside the verdict. On a host whose
+      // logs rotate faster than they can be read, this response is the only
+      // place an operator can learn why the desktop is not ready.
+      const observedGeometry =
+        COMPUTER_SURFACE === "desktop" ? await desktopGeometry() : null;
       const desktopIsReady =
-        COMPUTER_SURFACE === "desktop" ? await desktopReady() : undefined;
+        COMPUTER_SURFACE === "desktop"
+          ? observedGeometry === expectedDesktopGeometry()
+          : undefined;
       // 200 whenever this service is answering. Whether the desktop came up is
       // reported as data, not as a failed probe: a platform healthcheck that
       // fails on an unready subsystem kills the very process that could report
@@ -1100,6 +1108,8 @@ serve<StreamData>({
                 desktop: {
                   display: process.env.DISPLAY ?? ":1",
                   ready: desktopIsReady,
+                  expected: expectedDesktopGeometry(),
+                  observed: observedGeometry,
                   ...DESKTOP_RESOLUTION,
                 },
               }
