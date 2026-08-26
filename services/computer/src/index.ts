@@ -17,6 +17,7 @@ import {
   captureDesktopScreenshot,
   type DesktopFrameMessage,
   type DesktopModelAction,
+  desktopDiagnostics,
   desktopGeometry,
   expectedDesktopGeometry,
   performDesktopAction,
@@ -1079,6 +1080,10 @@ serve<StreamData>({
         COMPUTER_SURFACE === "desktop"
           ? observedGeometry === expectedDesktopGeometry()
           : undefined;
+      const desktopDiagnosis =
+        COMPUTER_SURFACE === "desktop" && desktopIsReady === false
+          ? await desktopDiagnostics()
+          : null;
       // 200 whenever this service is answering. Whether the desktop came up is
       // reported as data, not as a failed probe: a platform healthcheck that
       // fails on an unready subsystem kills the very process that could report
@@ -1110,6 +1115,7 @@ serve<StreamData>({
                   ready: desktopIsReady,
                   expected: expectedDesktopGeometry(),
                   observed: observedGeometry,
+                  ...(desktopDiagnosis ? { diagnosis: desktopDiagnosis } : {}),
                   ...DESKTOP_RESOLUTION,
                 },
               }

@@ -347,6 +347,45 @@ export async function desktopGeometry(): Promise<string | null> {
   }
 }
 
+/**
+ * Enough about the X server to tell apart the ways it can be missing.
+ *
+ * A null geometry says only that the display could not be read. Whether an X
+ * socket exists, and whether an Xvnc process is alive, separates "the desktop
+ * never started" from "it started and this process cannot reach it" -- which
+ * are different bugs with different fixes. Neither value is sensitive: it is a
+ * socket name and a process count.
+ */
+export async function desktopDiagnostics(): Promise<{
+  sockets: string[];
+  vncProcesses: number;
+}> {
+  const sockets = await Array.fromAsync(
+    new Bun.Glob("*").scan({ cwd: "/tmp/.X11-unix", onlyFiles: false }),
+  ).catch(() => [] as string[]);
+
+  let vncProcesses = 0;
+  try {
+    const process = Bun.spawn(["pgrep", "-c", "-f", "Xvnc|Xtigervnc"], {
+      stdout: "pipe",
+      stderr: "ignore",
+    });
+    const timeout = setTimeout(() => process.kill("SIGKILL"), READY_TIMEOUT_MS);
+    try {
+      const [, output] = await Promise.all([
+        process.exited,
+        new Response(process.stdout).text(),
+      ]);
+      vncProcesses = Number.parseInt(output.trim(), 10) || 0;
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch {
+    // pgrep absent or unreadable; the socket list still carries information.
+  }
+  return { sockets, vncProcesses };
+}
+
 /** The geometry our frames and pointer coordinates advertise. */
 export function expectedDesktopGeometry(): string {
   return `${DESKTOP_RESOLUTION.width} ${DESKTOP_RESOLUTION.height}`;
