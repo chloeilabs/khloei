@@ -82,6 +82,34 @@ describe('computer deployment parity', () => {
     expect(skew.detail).toContain('below the minimum 2')
   })
 
+  test('flags a same-version computer that is missing capabilities', () => {
+    // A desktop whose display never came up reports contract 2 without
+    // desktop-visual. Comparing versions alone called that aligned.
+    const skew = evaluateComputerContract(
+      health(COMPUTER_CONTRACT_VERSION, [
+        'browser-refs',
+        'workspace-files',
+        'desktop-shell',
+        'screenshot-mime',
+      ]),
+    )
+
+    expect(skew.severity).toBe('computer-degraded')
+    expect(skew.missingFeatures).toEqual(['desktop-visual'])
+    // Still drivable: the browser, file and command tools are unaffected.
+    expect(skew.compatible).toBe(true)
+    expect(skew.detail).toContain('desktop-visual')
+  })
+
+  test('treats a computer reporting no feature list as version-only', () => {
+    // Older images report a version but no features; absence of the list is not
+    // evidence that capabilities are missing.
+    const skew = evaluateComputerContract(health(COMPUTER_CONTRACT_VERSION, []))
+
+    expect(skew.severity).toBe('aligned')
+    expect(skew.missingFeatures).toEqual([])
+  })
+
   test('flags a computer newer than the app without breaking it', () => {
     const skew = evaluateComputerContract(
       health(COMPUTER_CONTRACT_VERSION + 1),

@@ -1071,9 +1071,15 @@ serve<StreamData>({
       const [profile] = profiles.summary([botId]);
       const desktopIsReady =
         COMPUTER_SURFACE === "desktop" ? await desktopReady() : undefined;
+      // 200 whenever this service is answering. Whether the desktop came up is
+      // reported as data, not as a failed probe: a platform healthcheck that
+      // fails on an unready subsystem kills the very process that could report
+      // it, and the browser, file and command tools are unaffected by a desktop
+      // that never started. Readiness still reaches callers through
+      // `desktop.ready` and through the contract features below.
       return json(
         {
-          status: desktopIsReady === false ? "starting" : "ok",
+          status: "ok",
           surface: COMPUTER_SURFACE,
           // What this image promises the app. Reported on the one unauthenticated
           // path so an operator or orchestrator can see version skew without
@@ -1082,7 +1088,8 @@ serve<StreamData>({
           contract: {
             features: [...COMPUTER_CONTRACT_FEATURES].filter(
               (feature) =>
-                (feature !== "desktop-visual" || COMPUTER_SURFACE === "desktop") &&
+                (feature !== "desktop-visual" ||
+                  (COMPUTER_SURFACE === "desktop" && desktopIsReady !== false)) &&
                 (feature !== "desktop-shell" || shellAvailable()),
             ),
             version: COMPUTER_CONTRACT_VERSION,
@@ -1106,7 +1113,7 @@ serve<StreamData>({
           // difference between "no identity here" and "identity broken" is visible.
           identity: await identity(),
         },
-        desktopIsReady === false ? 503 : 200,
+        200,
       );
     }
 

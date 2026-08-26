@@ -110,10 +110,14 @@ computer_pid=$!
   /dockerstartup/vnc_startup.sh &
 desktop_pid=$!
 
+# A desktop that will not start is a degraded computer, not a dead one. The Bun
+# service still serves the browser, files, the governed command runner and, most
+# importantly, /health -- which reports `desktop.ready: false` so the failure is
+# visible. Killing the container here destroyed the only process able to explain
+# what went wrong, and on a platform that restarts on failure it produced a
+# crash loop whose logs were rotated away faster than they could be read.
 if ! configure_desktop_resolution; then
-  kill -TERM "$computer_pid" "$desktop_pid" 2>/dev/null || true
-  wait "$computer_pid" "$desktop_pid" 2>/dev/null || true
-  exit 1
+  echo "Khloei is serving without its Linux desktop; visual tools will refuse." >&2
 fi
 
 shutdown() {

@@ -63,6 +63,8 @@ export type ComputerSkewSeverity =
   | 'aligned'
   | 'computer-ahead'
   | 'computer-behind'
+  /** Right contract version, but not currently providing every capability. */
+  | 'computer-degraded'
   | 'unknown'
   | 'unsupported'
 
@@ -123,20 +125,46 @@ export function evaluateComputerContract(
     }
   }
 
-  const missingFeatures = [...COMPUTER_CONTRACT_FEATURES].filter(
+  // Two computers can implement the same contract version and still differ:
+  // a browser-only image, or a desktop whose display never came up, reports
+  // fewer features. Comparing only version numbers called that "aligned" and
+  // hid exactly the degradation this module exists to surface, so the reported
+  // feature list is checked whenever the computer provides one.
+  const absentFeatures = [...COMPUTER_CONTRACT_FEATURES].filter(
     (feature) =>
       FEATURE_VERSIONS[feature] <= expectedVersion &&
-      FEATURE_VERSIONS[feature] > report.version,
+      report.features.length > 0 &&
+      !report.features.includes(feature),
   )
+  const missingFeatures = [
+    ...new Set([
+      ...[...COMPUTER_CONTRACT_FEATURES].filter(
+        (feature) =>
+          FEATURE_VERSIONS[feature] <= expectedVersion &&
+          FEATURE_VERSIONS[feature] > report.version,
+      ),
+      ...absentFeatures,
+    ]),
+  ]
 
   if (report.version === expectedVersion) {
+    if (missingFeatures.length === 0) {
+      return {
+        compatible: true,
+        detail: `The computer implements contract ${report.version}, which is what this build expects.`,
+        expectedVersion,
+        missingFeatures: [],
+        reportedVersion: report.version,
+        severity: 'aligned',
+      }
+    }
     return {
       compatible: true,
-      detail: `The computer implements contract ${report.version}, which is what this build expects.`,
+      detail: `The computer implements contract ${report.version} but is not currently providing ${missingFeatures.join(', ')}. Those tools will refuse until it does.`,
       expectedVersion,
-      missingFeatures: [],
+      missingFeatures,
       reportedVersion: report.version,
-      severity: 'aligned',
+      severity: 'computer-degraded',
     }
   }
 
