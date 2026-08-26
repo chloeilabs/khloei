@@ -45,24 +45,10 @@ jobs:
       - name: Test
         run: bun run --cwd services/computer test
 
-      # The desktop image is roughly 7.5 GB. A hosted runner starts with about
-      # 14 GB free, so the image plus its build cache can exhaust the disk. That
-      # surfaces only as a container that will not start, with no error of its
-      # own, so the space is reclaimed before the build rather than diagnosed
-      # after it.
-      - name: Free disk space for the desktop image
-        run: |
-          df -h /
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android \
-            /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
-            /usr/local/share/powershell /usr/share/swift
-          sudo docker image prune --all --force
-          df -h /
-
       - name: Build smoke image
         run: |
           docker build --platform linux/amd64 --file services/computer/Dockerfile.desktop --tag khloei-computer:smoke .
-          docker builder prune --force >/dev/null 2>&1 || true
+          docker image inspect khloei-computer:smoke --format 'image size: {{.Size}} bytes'
           df -h /
 
       - name: Boot and verify smoke image
