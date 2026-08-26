@@ -316,6 +316,12 @@ The equivalent local build is:
 docker build --platform linux/amd64 -f services/computer/Dockerfile.desktop -t khloei-computer .
 ```
 
+[`services/computer/Dockerfile`](./services/computer/Dockerfile) still builds the
+browser-only computer, the surface `KHLOEI_COMPUTER_SURFACE` selects by default.
+It is a smaller image for deployments that need the browser, files and command
+runner without a desktop. Nothing builds it automatically, so it is not covered
+by CI and can drift; rebuild and boot it before relying on it.
+
 The [`agent-worker-image.yml`](./.github/workflows/agent-worker-image.yml)
 workflow similarly publishes `khloei-agent-worker`. Its local build is:
 
