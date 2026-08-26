@@ -357,8 +357,12 @@ export async function desktopGeometry(): Promise<string | null> {
  * socket name and a process count.
  */
 export async function desktopDiagnostics(): Promise<{
+  home: string;
+  homeWritable: boolean;
   sockets: string[];
+  uid: number | null;
   vncProcesses: number;
+  vncStateWritable: boolean;
 }> {
   const sockets = await Array.fromAsync(
     new Bun.Glob("*").scan({ cwd: "/tmp/.X11-unix", onlyFiles: false }),
@@ -383,7 +387,32 @@ export async function desktopDiagnostics(): Promise<{
   } catch {
     // pgrep absent or unreadable; the socket list still carries information.
   }
-  return { sockets, vncProcesses };
+
+  // The X server writes its own state under HOME before it ever listens. HOME
+  // is a symlink onto the mounted volume, and the volume is only made writable
+  // by the privileged first pass of the entrypoint, so a runtime that starts
+  // the container unprivileged leaves the desktop unable to start while every
+  // other tool keeps working. Probe it rather than infer it.
+  const home = Bun.env.HOME ?? "/home/kasm-user";
+  const canWrite = async (directory: string) => {
+    const probe = `${directory}/.khloei-write-probe-${process.pid}`;
+    try {
+      await Bun.write(probe, "");
+      await Bun.file(probe).delete();
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  return {
+    home,
+    homeWritable: await canWrite(home),
+    sockets,
+    uid: process.getuid?.() ?? null,
+    vncProcesses,
+    vncStateWritable: await canWrite(`${home}/.vnc`),
+  };
 }
 
 /** The geometry our frames and pointer coordinates advertise. */
