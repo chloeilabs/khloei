@@ -5,10 +5,6 @@ import type {
 } from 'openai/resources/responses/responses'
 
 import {
-  createBackgroundResumeToken,
-  isOpenAIResponseId,
-} from '../../lib/openai-background'
-import {
   parseChatHistory,
   type ChatHistoryMessage,
 } from '../../lib/chat-history'
@@ -34,7 +30,6 @@ import {
 } from '../../lib/model-provider'
 import {
   createModelChatStreamResponse,
-  openAIErrorDetails,
   openRouterErrorDetails,
 } from '../../lib/model-chat-stream'
 import { requireSameOriginRequest } from '../../lib/request-origin'
@@ -175,12 +170,6 @@ export async function POST(request: Request) {
     return jsonError('Attachments must total 25 MB or less.', 413)
   }
 
-  const previousValue = formData.get('previousResponseId')
-  const previousResponseId =
-    isOpenAIResponseId(previousValue)
-      ? previousValue
-      : undefined
-
   const history = parseChatHistory(formData.get('history'))
   if (typeof history === 'string') return jsonError(history, 400)
 
@@ -204,7 +193,7 @@ export async function POST(request: Request) {
   }
   let provider: ModelProvider
   try {
-    provider = deepResearch ? 'openai' : chatModelProvider(selectedModelId)
+    provider = chatModelProvider(selectedModelId)
   } catch (error) {
     return (
       providerError(error) ??
@@ -213,13 +202,12 @@ export async function POST(request: Request) {
   }
 
   if (
-    provider === 'openrouter' &&
     attachments.some(
       (attachment) => !IMAGE_TYPES.has(attachmentMimeType(attachment)),
     )
   ) {
     return jsonError(
-      'The selected OpenRouter model currently accepts text and image attachments in Khloei. Select GPT-5.6 Terra to send documents.',
+      'Khloei currently accepts text and image attachments. Document attachments are not supported.',
       400,
     )
   }
@@ -260,9 +248,6 @@ export async function POST(request: Request) {
           history,
           model: selectedModelId,
           provider,
-          ...(previousResponseId && history.length === 0
-            ? { previousResponseId }
-            : {}),
           signal: request.signal,
         })
       } catch (error) {
@@ -284,7 +269,7 @@ export async function POST(request: Request) {
 
   let client
   try {
-    client = createModelClient(provider)
+    client = createModelClient()
   } catch (error) {
     return (
       providerError(error) ??
@@ -298,10 +283,6 @@ export async function POST(request: Request) {
       content,
       history,
       model: selectedModelId,
-      provider,
-      ...(previousResponseId && history.length === 0
-        ? { previousResponseId }
-        : {}),
       signal: request.signal,
     })
   }
@@ -348,8 +329,6 @@ export async function POST(request: Request) {
           model: deepResearch
             ? DEEP_RESEARCH_MODEL
             : selectedModelId,
-          previous_response_id:
-            history.length === 0 ? previousResponseId : undefined,
           reasoning: {
             context: 'all_turns',
             effort: deepResearch ? 'max' : 'medium',
@@ -370,23 +349,13 @@ export async function POST(request: Request) {
       )
     }
   } catch (error) {
-    const details =
-      provider === 'openrouter'
-        ? openRouterErrorDetails(error)
-        : openAIErrorDetails(error)
+    const details = openRouterErrorDetails(error)
     return jsonError(details.message, details.status)
   }
 
   return createModelChatStreamResponse({
-    ...(deepResearch
-      ? { backgroundToken: createBackgroundResumeToken, resumable: true }
-      : {}),
-    errorDetails:
-      provider === 'openrouter'
-        ? openRouterErrorDetails
-        : openAIErrorDetails,
+    errorDetails: openRouterErrorDetails,
     headers: modelResponseHeaders(
-      provider,
       deepResearch ? DEEP_RESEARCH_MODEL : selectedModelId,
     ),
     signal: request.signal,

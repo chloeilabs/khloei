@@ -18,7 +18,6 @@ type ComputerTaskOptions = {
   content: ResponseInputMessageContentList
   history: readonly ChatHistoryMessage[]
   model: ChatModelId
-  previousResponseId?: string
   provider: ModelProvider
   signal: AbortSignal
 }
@@ -27,7 +26,6 @@ export async function createComputerTaskResponse({
   content,
   history,
   model,
-  previousResponseId,
   provider,
   signal,
 }: ComputerTaskOptions) {
@@ -36,7 +34,6 @@ export async function createComputerTaskResponse({
       input: computerAgentInput(history, content),
       model,
       provider,
-      ...(previousResponseId ? { previousResponseId } : {}),
     },
     signal,
   )
@@ -54,7 +51,7 @@ export async function createComputerTaskResponse({
   return new Response(`${events.map((event) => JSON.stringify(event)).join('\n')}\n`, {
     headers: {
       ...STREAM_HEADERS,
-      ...modelResponseHeaders(provider, model),
+      ...modelResponseHeaders(model),
     },
   })
 }

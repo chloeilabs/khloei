@@ -38,25 +38,15 @@ type EvalResult = {
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
 
 function providerConfiguration() {
-  const requested = process.env.COMPUTER_EVAL_PROVIDER?.trim()
-  const provider =
-    requested === 'openai' || requested === 'openrouter'
-      ? requested
-      : process.env.OPENROUTER_API_KEY?.trim()
-        ? 'openrouter'
-        : 'openai'
-  const apiKey =
-    provider === 'openrouter'
-      ? process.env.OPENROUTER_API_KEY?.trim()
-      : process.env.OPENAI_API_KEY?.trim()
+  const provider = 'openrouter' as const
+  const apiKey = process.env.OPENROUTER_API_KEY?.trim()
   if (!apiKey) {
     throw new Error(
-      `${provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY'} is required to run the computer behavior evals.`,
+      'OPENROUTER_API_KEY is required to run the computer behavior evals.',
     )
   }
   const model =
-    process.env.COMPUTER_EVAL_MODEL?.trim() ||
-    (provider === 'openrouter' ? 'z-ai/glm-5.3-flash' : 'gpt-5.6-terra')
+    process.env.COMPUTER_EVAL_MODEL?.trim() || 'z-ai/glm-5.3-flash'
   return { apiKey, model, provider }
 }
 

@@ -7,7 +7,6 @@ import {
   OpenAIProvider,
   Runner,
   type RunState,
-  webSearchTool,
 } from '@openai/agents'
 import OpenAI from 'openai'
 import type {
@@ -29,13 +28,12 @@ import {
 import { normalizeComputerMarkdown } from '@/shared/markdown'
 import {
   STREAM_HEADERS,
-  openAIErrorDetails,
   openRouterErrorDetails,
   seedReasoningParts,
   streamActivity,
   terminalChatEvents,
 } from './model-chat-stream'
-import { modelResponseHeaders, type ModelProvider } from './model-provider'
+import { modelResponseHeaders } from './model-provider'
 import {
   createKhloeiComputerGateway,
   type ComputerGatewayProgress,
@@ -51,8 +49,6 @@ type ComputerStreamOptions = {
   content: ResponseInputMessageContentList
   history: readonly ChatHistoryMessage[]
   model: ChatModelId
-  provider: ModelProvider
-  previousResponseId?: string
   signal: AbortSignal
 }
 
@@ -131,8 +127,6 @@ export function createComputerStreamResponse({
   content,
   history,
   model,
-  provider,
-  previousResponseId,
   signal,
 }: ComputerStreamOptions) {
   const encoder = new TextEncoder()
@@ -222,26 +216,10 @@ export function createComputerStreamResponse({
           modelSettings: {
             maxTokens: 8_192,
             parallelToolCalls: false,
-            reasoning:
-              provider === 'openai'
-                ? {
-                    context: 'all_turns',
-                    effort: 'medium',
-                    summary: 'auto',
-                  }
-                : { effort: 'medium' },
-            ...(provider === 'openai'
-              ? { store: true, text: { verbosity: 'medium' as const } }
-              : {}),
+            reasoning: { effort: 'medium' },
             toolChoice: 'auto',
           },
-          tools:
-            provider === 'openai'
-              ? [
-                  webSearchTool({ searchContextSize: 'medium' }),
-                  ...tools,
-                ]
-              : tools,
+          tools,
         })
 
         modelProvider = new OpenAIProvider({
@@ -283,7 +261,6 @@ export function createComputerStreamResponse({
           content,
         )
         let turnLimit = computerAgentTurnLimit({ currentTurn: 0 })
-        let firstSegment = true
 
         if (turnLimit === null) {
           throw new Error(COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE)
@@ -304,9 +281,6 @@ export function createComputerStreamResponse({
               {
                 context: contextValue,
                 maxTurns: turnLimit,
-                ...(firstSegment && provider === 'openai' && previousResponseId
-                  ? { previousResponseId }
-                  : {}),
                 signal,
                 stream: true,
               },
@@ -345,7 +319,6 @@ export function createComputerStreamResponse({
                 // state with a cumulative ceiling so no completed action is repeated.
                 runInput = run.state
                 turnLimit = nextTurnLimit
-                firstSegment = false
                 continue
               }
             }
@@ -377,9 +350,7 @@ export function createComputerStreamResponse({
             })
           } else {
             const details =
-              provider === 'openrouter'
-                ? openRouterErrorDetails(providerCause(error))
-                : openAIErrorDetails(providerCause(error))
+              openRouterErrorDetails(providerCause(error))
             send({ message: details.message, type: 'error' })
           }
         }
@@ -393,7 +364,7 @@ export function createComputerStreamResponse({
   return new Response(body, {
     headers: {
       ...STREAM_HEADERS,
-      ...modelResponseHeaders(provider, model),
+      ...modelResponseHeaders(model),
     },
   })
 }

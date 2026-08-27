@@ -23,7 +23,6 @@ type OpenAIUrlCitation = Extract<
 export type ReasoningParts = Map<string, Map<number, string>>
 
 type OpenAIChatStreamOptions = {
-  backgroundToken?: (responseId: string) => string
   errorDetails?: (error: unknown) => { message: string; status: number }
   headers?: HeadersInit
   resumable?: boolean
@@ -379,10 +378,6 @@ export function modelAPIErrorDetails(
   return { message: 'Khloei could not complete that response.', status: 500 }
 }
 
-export function openAIErrorDetails(error: unknown) {
-  return modelAPIErrorDetails(error, 'OpenAI')
-}
-
 export function openRouterErrorDetails(error: unknown) {
   return modelAPIErrorDetails(error, 'OpenRouter')
 }
@@ -455,8 +450,7 @@ export function createTerminalChatResponse(response: OpenAIResponse) {
 }
 
 export function createModelChatStreamResponse({
-  backgroundToken,
-  errorDetails = openAIErrorDetails,
+  errorDetails = openRouterErrorDetails,
   headers,
   resumable = false,
   seedResponse,
@@ -488,19 +482,6 @@ export function createModelChatStreamResponse({
 
       try {
         for await (const event of stream) {
-          if (
-            event.type === 'response.created' &&
-            backgroundToken &&
-            typeof event.sequence_number === 'number'
-          ) {
-            send({
-              responseId: event.response.id,
-              resumeToken: backgroundToken(event.response.id),
-              sequenceNumber: event.sequence_number,
-              type: 'background',
-            })
-          }
-
           const terminal = terminalStreamEvents(event)
           if (terminal) {
             const cursor = sequenceNumber(event)

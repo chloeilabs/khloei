@@ -30,8 +30,8 @@ function request(): ComputerTaskRequest {
         type: 'message',
       },
     ],
-    model: 'gpt-5.6-terra',
-    provider: 'openai',
+    model: 'z-ai/glm-5.3-flash',
+    provider: 'openrouter',
   }
 }
 

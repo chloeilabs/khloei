@@ -2,10 +2,7 @@ import 'server-only'
 
 import OpenAI from 'openai'
 
-import {
-  OPENAI_CHAT_MODEL,
-  OPENROUTER_CHAT_MODEL,
-} from './chat-config'
+import { OPENROUTER_CHAT_MODEL } from './chat-config'
 import {
   chatModelById,
   type ChatModelId,
@@ -34,37 +31,21 @@ export class ModelProviderConfigurationError extends Error {
   }
 }
 
-function configuredProvider() {
-  const value = process.env.KHLOEI_MODEL_PROVIDER?.trim().toLowerCase()
-  if (!value) return undefined
-  if (value === 'openai' || value === 'openrouter') return value
-  throw new ModelProviderConfigurationError(
-    'KHLOEI_MODEL_PROVIDER must be either "openai" or "openrouter".',
-  )
-}
-
 export function chatModelProvider(modelId?: ChatModelId): ModelProvider {
   if (modelId) return chatModelById(modelId).provider
-  return (
-    configuredProvider() ??
-    (process.env.OPENROUTER_API_KEY?.trim() ? 'openrouter' : 'openai')
-  )
+  return 'openrouter'
 }
 
-export function modelForProvider(provider: ModelProvider) {
-  return provider === 'openrouter'
-    ? OPENROUTER_CHAT_MODEL
-    : OPENAI_CHAT_MODEL
+export function modelForProvider() {
+  return OPENROUTER_CHAT_MODEL
 }
 
-export function modelProviderLabel(provider: ModelProvider) {
-  return provider === 'openrouter' ? 'OpenRouter' : 'OpenAI'
+export function modelProviderLabel() {
+  return 'OpenRouter'
 }
 
-export function modelProviderKey(provider: ModelProvider) {
-  return provider === 'openrouter'
-    ? process.env.OPENROUTER_API_KEY?.trim()
-    : process.env.OPENAI_API_KEY?.trim()
+export function modelProviderKey() {
+  return process.env.OPENROUTER_API_KEY?.trim()
 }
 
 function openRouterHeaders() {
@@ -76,32 +57,29 @@ function openRouterHeaders() {
   return headers
 }
 
-export function createModelClient(provider: ModelProvider) {
-  const apiKey = modelProviderKey(provider)
+/**
+ * The OpenAI client library is how OpenRouter is reached: its API is
+ * OpenAI-compatible, so the SDK is the transport rather than a provider choice.
+ */
+export function createModelClient() {
+  const apiKey = modelProviderKey()
   if (!apiKey) {
     throw new ModelProviderConfigurationError(
-      `${provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY'} is not configured on the server.`,
+      'OPENROUTER_API_KEY is not configured on the server.',
     )
   }
 
   return new OpenAI({
     apiKey,
-    ...(provider === 'openrouter'
-      ? {
-          baseURL: OPENROUTER_BASE_URL,
-          defaultHeaders: openRouterHeaders(),
-        }
-      : {}),
+    baseURL: OPENROUTER_BASE_URL,
+    defaultHeaders: openRouterHeaders(),
   })
 }
 
-export function modelResponseHeaders(
-  provider: ModelProvider,
-  model = modelForProvider(provider),
-) {
+export function modelResponseHeaders(model: string = modelForProvider()) {
   return {
     'X-Khloei-Model': model,
-    'X-Khloei-Model-Provider': provider,
+    'X-Khloei-Model-Provider': 'openrouter',
   }
 }
 

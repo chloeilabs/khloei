@@ -33,6 +33,7 @@ import {
 import { TaskEventNotifier } from './notifier'
 import { isCommittedActionResult, TaskStore } from './store'
 import type {
+  ModelProvider,
   PendingApproval,
   TaskRecord,
   WorkerActionResponse,
@@ -172,15 +173,15 @@ function outputItemActivity(value: unknown, completed: boolean) {
   return null
 }
 
-function providerError(error: unknown, provider: 'openai' | 'openrouter') {
+function providerError(error: unknown, _provider: ModelProvider) {
   const status =
     isRecord(error) && typeof error.status === 'number' ? error.status : 500
   const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
   if (code === 'billing_not_active') {
-    return `${provider === 'openai' ? 'OpenAI' : 'OpenRouter'} billing is not active for this API key.`
+    return 'OpenRouter billing is not active for this API key.'
   }
   if (status === 401 || status === 403) {
-    return `The ${provider === 'openai' ? 'OpenAI' : 'OpenRouter'} API key is invalid or cannot use this model.`
+    return 'The OpenRouter API key is invalid or cannot use this model.'
   }
   if (status === 429) return 'The model provider is rate-limiting this task.'
   if (status >= 500) return 'The model provider is temporarily unavailable.'
@@ -189,28 +190,23 @@ function providerError(error: unknown, provider: 'openai' | 'openrouter') {
     : 'Khloei could not complete the computer task.'
 }
 
-function createModelClient(task: TaskRecord) {
-  const key =
-    task.request.provider === 'openrouter'
-      ? process.env.OPENROUTER_API_KEY?.trim()
-      : process.env.OPENAI_API_KEY?.trim()
+/**
+ * The OpenAI client library is the transport for OpenRouter, whose API is
+ * OpenAI-compatible. It is not a provider choice.
+ */
+function createModelClient(_task: TaskRecord) {
+  const key = process.env.OPENROUTER_API_KEY?.trim()
   if (!key) {
-    throw new Error(
-      `${task.request.provider === 'openrouter' ? 'OPENROUTER_API_KEY' : 'OPENAI_API_KEY'} is not configured on the worker.`,
-    )
+    throw new Error('OPENROUTER_API_KEY is not configured on the worker.')
   }
   const siteUrl = process.env.OPENROUTER_SITE_URL?.trim()
   return new OpenAI({
     apiKey: key,
-    ...(task.request.provider === 'openrouter'
-      ? {
-          baseURL: OPENROUTER_BASE_URL,
-          defaultHeaders: {
-            ...(siteUrl ? { 'HTTP-Referer': siteUrl } : {}),
-            'X-OpenRouter-Title': 'Khloei',
-          },
-        }
-      : {}),
+    baseURL: OPENROUTER_BASE_URL,
+    defaultHeaders: {
+      ...(siteUrl ? { 'HTTP-Referer': siteUrl } : {}),
+      'X-OpenRouter-Title': 'Khloei',
+    },
   })
 }
 
@@ -344,19 +340,10 @@ export class ComputerTaskRuntime {
         modelSettings: {
           maxTokens: 8_192,
           parallelToolCalls: false,
-          reasoning:
-            task.request.provider === 'openai'
-              ? { context: 'all_turns', effort: 'medium', summary: 'auto' }
-              : { effort: 'medium' },
-          ...(task.request.provider === 'openai'
-            ? { store: true, text: { verbosity: 'medium' as const } }
-            : {}),
+          reasoning: { effort: 'medium' },
           toolChoice: 'auto',
         },
-        tools:
-          task.request.provider === 'openai'
-            ? [webSearchTool({ searchContextSize: 'medium' }), ...tools]
-            : tools,
+        tools,
       })
       modelProvider = new OpenAIProvider({
         openAIClient: client,
@@ -424,12 +411,6 @@ export class ComputerTaskRuntime {
         const run = await runner.run(agent, input, {
           context: contextValue,
           maxTurns: turnLimit,
-          ...(firstSegment &&
-          task.request.provider === 'openai' &&
-          task.request.previousResponseId &&
-          !task.runState
-            ? { previousResponseId: task.request.previousResponseId }
-            : {}),
           signal,
           stream: true,
         })

@@ -6,7 +6,6 @@ import {
   Check,
   ChevronDown,
   Rocket,
-  Sparkles,
   Telescope,
 } from 'lucide-react'
 
@@ -18,7 +17,6 @@ import {
 import { PromptGlass } from './prompt-glass'
 
 const MODEL_ICONS = {
-  'gpt-5.6-terra': Sparkles,
   'z-ai/glm-5.3-flash': Atom,
   'x-ai/grok-4.6': Rocket,
 } satisfies Record<ChatModelId, typeof Atom>
@@ -41,7 +39,7 @@ export function ModelSelector({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const selected = chatModelById(value)
   const forced = mode === 'deep-research'
-  const modelName = forced ? 'GPT-5.6 Sol' : selected.name
+  const modelName = forced ? 'GLM 5.3 Flash' : selected.name
   const SelectedIcon = forced ? Telescope : MODEL_ICONS[selected.id]
 
   const focusOption = (index: number) => {

@@ -17,7 +17,6 @@ export async function generateFollowUpQuestions({
   client,
   messages,
   model,
-  provider,
   signal,
 }: {
   client: OpenAI
@@ -52,7 +51,6 @@ export async function generateFollowUpQuestions({
         max_output_tokens: 400,
         model,
         reasoning: { effort: 'low' },
-        ...(provider === 'openai' ? { store: false } : {}),
         text: {
           format: {
             name: 'follow_up_questions',

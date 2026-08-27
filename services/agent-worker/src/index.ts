@@ -25,7 +25,6 @@ const WORKER_TOKEN =
   DEDICATED_WORKER_TOKEN ||
   (LOCAL_DEVELOPMENT ? process.env.COMPUTER_TOKEN?.trim() : undefined)
 const MAX_CREATE_BODY_BYTES = 40 * 1024 * 1024
-const RESPONSE_ID_PATTERN = /^resp_[A-Za-z0-9_-]{8,200}$/
 const TASK_PATH = /^\/v1\/tasks\/(task_[A-Za-z0-9_-]{16,100})$/
 const EVENTS_PATH =
   /^\/v1\/tasks\/(task_[A-Za-z0-9_-]{16,100})\/events$/
@@ -64,16 +63,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function taskRequest(value: unknown): ComputerTaskRequest | null {
   if (!isRecord(value)) return null
   if (
-    (value.provider !== 'openai' && value.provider !== 'openrouter') ||
+    value.provider !== 'openrouter' ||
     typeof value.model !== 'string' ||
     !value.model ||
     value.model.length > 200 ||
     !Array.isArray(value.input) ||
     value.input.length === 0 ||
-    value.input.length > 100 ||
-    (value.previousResponseId !== undefined &&
-      (typeof value.previousResponseId !== 'string' ||
-        !RESPONSE_ID_PATTERN.test(value.previousResponseId)))
+    value.input.length > 100
   ) {
     return null
   }
@@ -81,9 +77,6 @@ function taskRequest(value: unknown): ComputerTaskRequest | null {
     input: value.input as ComputerTaskRequest['input'],
     model: value.model,
     provider: value.provider,
-    ...(typeof value.previousResponseId === 'string'
-      ? { previousResponseId: value.previousResponseId }
-      : {}),
   }
 }
 

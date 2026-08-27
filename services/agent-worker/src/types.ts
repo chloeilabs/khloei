@@ -1,11 +1,11 @@
 import type { AgentInputItem } from '@openai/agents'
 
-export type ModelProvider = 'openai' | 'openrouter'
+/** Khloei reaches every model through OpenRouter. */
+export type ModelProvider = 'openrouter'
 
 export type ComputerTaskRequest = {
   input: AgentInputItem[]
   model: string
-  previousResponseId?: string
   provider: ModelProvider
 }
 

@@ -2,16 +2,15 @@
 
 Khloei is a [Next.js](https://nextjs.org) application.
 
-Normal chat, follow-up suggestions, and Computer Use can run through OpenRouter
-with `z-ai/glm-5.3-flash` or `x-ai/grok-4.6`. Khloei uses OpenRouter's Responses
-API compatibility, streamed output, model-controlled web search, multimodal
-image inputs, Markdown rendering, and a bounded stateless conversation history.
-Select `gpt-5.6-terra` to run normal chat through OpenAI instead.
+Normal chat, follow-up suggestions, and Computer Use run through OpenRouter with
+`z-ai/glm-5.3-flash` or `x-ai/grok-4.6`. Khloei uses OpenRouter's Responses API
+compatibility, streamed output, model-controlled web search, multimodal image
+inputs, Markdown rendering, and a bounded stateless conversation history.
 
-Deep Research always runs with `gpt-5.6-sol` in OpenAI background mode, so a
-long response can resume after a transient disconnect, a serverless timeout, or
-a browser reload. Stop and New Chat also cancel the active background response
-at OpenAI.
+Deep Research runs with `z-ai/glm-5.3-flash` as an ordinary stream. Computer Use
+remains durable across a disconnect, a serverless timeout, or a browser reload,
+because that durability comes from Khloei's own worker and its exactly-once
+action ledger rather than from the model provider.
 
 Computer Use gives Khloei a persistent Playwright browser, a confined file
 workspace, and an optional full Linux desktop. Browser, file, command, and
@@ -34,7 +33,6 @@ npm run computer:install
 Add the server-only variables to `.env.local`:
 
 ```bash
-OPENAI_API_KEY=your_key_here
 OPENROUTER_API_KEY=your_openrouter_key_here
 COMPUTER_TOKEN=replace_with_a_long_random_value
 KHLOEI_COMPUTER_URL=http://127.0.0.1:4100
@@ -50,15 +48,22 @@ AGENT_WORKER_MAINTENANCE_MS=5000
 AGENT_WORKER_RETENTION_DAYS=30
 ```
 
-The model selector determines the provider for normal chat, follow-up
-suggestions, and Computer Use. `OPENROUTER_API_KEY` is required for GLM 5.3 Flash or
-Grok 4.6, while `OPENAI_API_KEY` is required for GPT-5.6 Terra and Deep
-Research. `OPENROUTER_SITE_URL=https://your-domain.example` is optional and is
-sent as OpenRouter's `HTTP-Referer` attribution header.
+Khloei reaches every model through OpenRouter, so `OPENROUTER_API_KEY` is the
+only model credential it needs. The OpenAI client library is still a dependency
+because OpenRouter's API is OpenAI-compatible; it is the transport, not a
+provider choice. `OPENROUTER_SITE_URL=https://your-domain.example` is optional
+and is sent as OpenRouter's `HTTP-Referer` attribution header.
 
-Keep `OPENAI_API_KEY` configured for Deep Research. OpenRouter models currently
-accept text and image attachments in Khloei; select OpenAI explicitly when
-sending PDF, office-document, or other file attachments.
+The model selector chooses between GLM 5.3 Flash and Grok 4.6 for normal chat,
+follow-up suggestions, and Computer Use. Deep Research uses GLM 5.3 Flash and
+runs as an ordinary stream: resumable background responses were an OpenAI
+Responses API feature with no OpenRouter equivalent, so a Deep Research run no
+longer survives a page reload. Computer Use tasks are unaffected, because their
+durability comes from Khloei's own worker rather than the model provider.
+
+Attachments are sent as file input whatever their type. Whether a PDF or office
+document is understood depends on the selected OpenRouter model rather than on
+Khloei.
 
 `COMPUTER_TOKEN` authenticates the app to the computer service. Generate one,
 for example, with `openssl rand -hex 32`. Never prefix it with `NEXT_PUBLIC_`.

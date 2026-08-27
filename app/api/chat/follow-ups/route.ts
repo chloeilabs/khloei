@@ -47,7 +47,7 @@ export async function POST(request: Request) {
   let client
   try {
     provider = chatModelProvider(selectedModelId)
-    client = createModelClient(provider)
+    client = createModelClient()
   } catch (error) {
     if (error instanceof ModelProviderConfigurationError) {
       return jsonError(error.message, error.status)
@@ -65,6 +65,6 @@ export async function POST(request: Request) {
 
   return Response.json(
     { followUpQuestions },
-    { headers: modelResponseHeaders(provider, selectedModelId) },
+    { headers: modelResponseHeaders(selectedModelId) },
   )
 }

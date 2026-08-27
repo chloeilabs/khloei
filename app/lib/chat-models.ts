@@ -1,10 +1,10 @@
 import {
-  OPENAI_CHAT_MODEL,
   OPENROUTER_CHAT_MODEL,
   OPENROUTER_GROK_MODEL,
 } from './chat-config'
 
-export type ChatModelProvider = 'openai' | 'openrouter'
+/** Khloei reaches every model through OpenRouter. */
+export type ChatModelProvider = 'openrouter'
 
 export const CHAT_MODELS = [
   {
@@ -18,12 +18,6 @@ export const CHAT_MODELS = [
     name: 'Grok 4.6',
     provider: 'openrouter',
     providerName: 'OpenRouter',
-  },
-  {
-    id: OPENAI_CHAT_MODEL,
-    name: 'GPT-5.6 Terra',
-    provider: 'openai',
-    providerName: 'OpenAI',
   },
 ] as const satisfies ReadonlyArray<{
   id: string

@@ -9,7 +9,7 @@ const source = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({
   PATH: process.env.PATH ?? "/usr/bin:/bin",
   LANG: "C.UTF-8",
   HTTP_PROXY: "http://user:password@proxy.example:8080",
-  OPENAI_API_KEY: "secret-model-key",
+  OPENROUTER_API_KEY: "secret-model-key",
   COMPUTER_TOKEN: "secret-computer-token",
   ...extra,
 });
@@ -19,7 +19,7 @@ describe("command environment", () => {
     const environment = environmentForCommand(source(), "/workspace");
     expect(environment.HOME).toBe("/workspace");
     expect(environment.PWD).toBe("/workspace");
-    expect(environment).not.toHaveProperty("OPENAI_API_KEY");
+    expect(environment).not.toHaveProperty("OPENROUTER_API_KEY");
     expect(environment).not.toHaveProperty("COMPUTER_TOKEN");
     expect(environment.HTTP_PROXY).toBe("http://proxy.example:8080");
   });

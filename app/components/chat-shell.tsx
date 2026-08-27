@@ -44,15 +44,10 @@ import { PromptInput, type PromptSubmission } from './prompt-input'
 const BACKGROUND_CHECKPOINT_DELAY_MS = 250
 const BACKGROUND_RECONNECT_MAX_DELAY_MS = 10_000
 
-type BackgroundConnection =
-  | Omit<
-      Extract<ActiveBackgroundChat, { backgroundKind: 'openai' }>,
-      'messages' | 'version'
-    >
-  | Omit<
-      Extract<ActiveBackgroundChat, { backgroundKind: 'computer' }>,
-      'messages' | 'version'
-    >
+type BackgroundConnection = Omit<
+  ActiveBackgroundChat,
+  'messages' | 'version'
+>
 
 class ChatRequestError extends Error {
   status: number
@@ -119,19 +114,6 @@ function streamEvent(value: unknown): ChatStreamEvent | null {
         resumeToken: event.resumeToken,
         sequenceNumber: Number(event.sequenceNumber),
         taskId: event.taskId,
-        type: 'background',
-      }
-    }
-    if (
-      (event.backgroundKind === undefined ||
-        event.backgroundKind === 'openai') &&
-      typeof event.responseId === 'string'
-    ) {
-      return {
-        backgroundKind: 'openai',
-        responseId: event.responseId,
-        resumeToken: event.resumeToken,
-        sequenceNumber: Number(event.sequenceNumber),
         type: 'background',
       }
     }
@@ -322,17 +304,11 @@ export function ChatShell() {
 
   const cancelBackgroundResponse = useCallback(
     (active: BackgroundConnection) => {
-      const identity =
-        active.backgroundKind === 'computer'
-          ? { taskId: active.taskId }
-          : { responseId: active.responseId }
       void fetch(
-        active.backgroundKind === 'computer'
-          ? '/api/chat/computer'
-          : '/api/chat/background',
+        '/api/chat/computer',
         {
           body: JSON.stringify({
-            ...identity,
+            taskId: active.taskId,
             resumeToken: active.resumeToken,
             startingAfter: active.sequenceNumber,
           }),
@@ -409,24 +385,14 @@ export function ChatShell() {
       const controller = new AbortController()
 
       if (background) {
-        activeBackgroundRef.current =
-          background.backgroundKind === 'computer'
-            ? {
-                assistantId: background.assistantId,
-                backgroundKind: 'computer',
-                createdAt: background.createdAt,
-                resumeToken: background.resumeToken,
-                sequenceNumber: background.sequenceNumber,
-                taskId: background.taskId,
-              }
-            : {
-                assistantId: background.assistantId,
-                backgroundKind: 'openai',
-                createdAt: background.createdAt,
-                responseId: background.responseId,
-                resumeToken: background.resumeToken,
-                sequenceNumber: background.sequenceNumber,
-              }
+        activeBackgroundRef.current = {
+          assistantId: background.assistantId,
+          backgroundKind: 'computer',
+          createdAt: background.createdAt,
+          resumeToken: background.resumeToken,
+          sequenceNumber: background.sequenceNumber,
+          taskId: background.taskId,
+        }
         backgroundCheckpointMessagesRef.current = messagesRef.current
       }
 
@@ -442,17 +408,11 @@ export function ChatShell() {
             try {
               const active = activeBackgroundRef.current
               if (active?.assistantId === assistantId) {
-                const identity =
-                  active.backgroundKind === 'computer'
-                    ? { taskId: active.taskId }
-                    : { responseId: active.responseId }
                 response = await fetch(
-                  active.backgroundKind === 'computer'
-                    ? '/api/chat/computer'
-                    : '/api/chat/background',
+                  '/api/chat/computer',
                   {
                     body: JSON.stringify({
-                      ...identity,
+                      taskId: active.taskId,
                       resumeToken: active.resumeToken,
                       startingAfter: active.sequenceNumber,
                     }),
@@ -531,24 +491,14 @@ export function ChatShell() {
                     ),
                   )
                 } else if (event.type === 'background') {
-                  const active: BackgroundConnection =
-                    event.backgroundKind === 'computer'
-                      ? {
-                          assistantId,
-                          backgroundKind: 'computer',
-                          createdAt: Date.now(),
-                          resumeToken: event.resumeToken,
-                          sequenceNumber: event.sequenceNumber,
-                          taskId: event.taskId,
-                        }
-                      : {
-                          assistantId,
-                          backgroundKind: 'openai',
-                          createdAt: Date.now(),
-                          responseId: event.responseId,
-                          resumeToken: event.resumeToken,
-                          sequenceNumber: event.sequenceNumber,
-                        }
+                  const active: BackgroundConnection = {
+                    assistantId,
+                    backgroundKind: 'computer',
+                    createdAt: Date.now(),
+                    resumeToken: event.resumeToken,
+                    sequenceNumber: event.sequenceNumber,
+                    taskId: event.taskId,
+                  }
                   activeBackgroundRef.current = active
                   backgroundCheckpointMessagesRef.current = messagesRef.current
                   flushBackgroundCheckpoint()

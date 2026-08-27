@@ -24,11 +24,10 @@ type ActiveBackgroundBase = {
   version: 2
 }
 
-export type ActiveBackgroundChat = ActiveBackgroundBase &
-  (
-    | { backgroundKind: 'openai'; responseId: string }
-    | { backgroundKind: 'computer'; taskId: string }
-  )
+export type ActiveBackgroundChat = ActiveBackgroundBase & {
+  backgroundKind: 'computer'
+  taskId: string
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -236,10 +235,11 @@ export function snapshotBackgroundMessages(
 
 function parseActiveBackgroundChat(value: unknown): ActiveBackgroundChat | null {
   if (!isRecord(value)) return null
-  const isLegacy = value.version === 1
-  const backgroundKind = isLegacy ? 'openai' : value.backgroundKind
+  // Version 1 stored an OpenAI background response. That provider is gone, so
+  // such an entry can only describe work that can no longer be resumed.
+  const backgroundKind = value.backgroundKind
   if (
-    (!isLegacy && value.version !== 2) ||
+    value.version !== 2 ||
     typeof value.assistantId !== 'string' ||
     typeof value.createdAt !== 'number' ||
     !Number.isFinite(value.createdAt) ||
@@ -255,16 +255,8 @@ function parseActiveBackgroundChat(value: unknown): ActiveBackgroundChat | null 
   ) {
     return null
   }
-  if (backgroundKind !== 'openai' && backgroundKind !== 'computer') {
-    return null
-  }
-  if (
-    (backgroundKind === 'openai' &&
-      (typeof value.responseId !== 'string' ||
-        !RESPONSE_ID_PATTERN.test(value.responseId))) ||
-    (backgroundKind === 'computer' &&
-      (typeof value.taskId !== 'string' || !TASK_ID_PATTERN.test(value.taskId)))
-  ) {
+  if (backgroundKind !== 'computer') return null
+  if (typeof value.taskId !== 'string' || !TASK_ID_PATTERN.test(value.taskId)) {
     return null
   }
 
@@ -288,9 +280,7 @@ function parseActiveBackgroundChat(value: unknown): ActiveBackgroundChat | null 
     sequenceNumber: Number(value.sequenceNumber),
     version: 2 as const,
   }
-  return backgroundKind === 'computer'
-    ? { ...base, backgroundKind, taskId: value.taskId as string }
-    : { ...base, backgroundKind, responseId: value.responseId as string }
+  return { ...base, backgroundKind, taskId: value.taskId as string }
 }
 
 export function readActiveBackgroundChat(): ActiveBackgroundChat | null {
@@ -303,10 +293,6 @@ export function readActiveBackgroundChat(): ActiveBackgroundChat | null {
     if (!raw) return null
     const restored = parseActiveBackgroundChat(JSON.parse(raw) as unknown)
     if (!restored) throw new Error('invalid')
-    if (restored.backgroundKind === 'openai') {
-      window.localStorage.removeItem(LEGACY_STORAGE_KEY)
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(restored))
-    }
     return restored
   } catch {
     window.localStorage.removeItem(STORAGE_KEY)
