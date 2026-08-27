@@ -19,7 +19,7 @@ import { PromptGlass } from './prompt-glass'
 
 const MODEL_ICONS = {
   'gpt-5.6-terra': Sparkles,
-  'stealth/ox-alpha': Atom,
+  'z-ai/glm-5.3-flash': Atom,
   'x-ai/grok-4.6': Rocket,
 } satisfies Record<ChatModelId, typeof Atom>
 

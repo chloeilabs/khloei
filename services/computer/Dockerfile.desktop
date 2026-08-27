@@ -71,28 +71,30 @@ RUN apt-get update \
 # it carries, which is felt directly as input lag while driving the desktop.
 #
 # arm64 therefore uses Debian's Chromium, which is the same engine Playwright
-# drives, so a developer machine runs the desktop natively. amd64 keeps Chrome
-# and VS Code, and that is what production deploys.
+# drives, so a developer machine runs the desktop natively. VS Code publishes
+# for both, so the desktop offers the same tools either way; only the browser
+# package differs, and amd64 is what production deploys.
 ARG TARGETARCH
 RUN set -eux; \
+  curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
+    | gpg --dearmor -o /usr/share/keyrings/microsoft-vscode.gpg; \
+  echo "deb [arch=${TARGETARCH} signed-by=/usr/share/keyrings/microsoft-vscode.gpg] https://packages.microsoft.com/repos/code stable main" \
+    > /etc/apt/sources.list.d/vscode.list; \
   if [ "${TARGETARCH}" = "amd64" ]; then \
     curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
       | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg; \
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" \
       > /etc/apt/sources.list.d/google-chrome.list; \
-    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc \
-      | gpg --dearmor -o /usr/share/keyrings/microsoft-vscode.gpg; \
-    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-vscode.gpg] https://packages.microsoft.com/repos/code stable main" \
-      > /etc/apt/sources.list.d/vscode.list; \
     apt-get update; \
     apt-get install -y --no-install-recommends google-chrome-stable code; \
   else \
     apt-get update; \
-    apt-get install -y --no-install-recommends chromium; \
+    apt-get install -y --no-install-recommends chromium code; \
     ln -sf /usr/bin/chromium /usr/bin/google-chrome; \
   fi; \
   rm -rf /var/lib/apt/lists/*; \
-  test -x /usr/bin/google-chrome
+  test -x /usr/bin/google-chrome; \
+  command -v code
 
 COPY --from=bun_runtime /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=node_runtime /usr/local/bin/node /usr/local/bin/node

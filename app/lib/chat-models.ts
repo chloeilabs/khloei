@@ -9,7 +9,7 @@ export type ChatModelProvider = 'openai' | 'openrouter'
 export const CHAT_MODELS = [
   {
     id: OPENROUTER_CHAT_MODEL,
-    name: 'Ox Alpha',
+    name: 'GLM 5.3 Flash',
     provider: 'openrouter',
     providerName: 'OpenRouter',
   },

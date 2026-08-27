@@ -53,6 +53,52 @@ for entry in /etc/skel/Desktop/*.desktop; do
   [[ -e "$target" ]] || cp "$entry" "$target"
 done
 
+# One-time repair of a desktop inherited from the previous KasmVNC image.
+#
+# The volume outlived that image, so it still carries links into /home/kasm-user
+# -- a user this image does not have -- and a launcher for Firefox, which it does
+# not install. Both show up on the desktop and silently do nothing when clicked.
+# Because seeding deliberately never overwrites an existing entry, they would
+# otherwise persist forever.
+#
+# A marker makes this a migration rather than a policy: it runs once per volume,
+# and afterwards a person's own desktop is left entirely alone, including any
+# launcher they add for something not currently installed.
+repair_inherited_desktop() {
+  local marker="$HOME/.khloei/desktop-repair-v1"
+  [[ -e "$marker" ]] && return 0
+  mkdir -p "$(dirname "$marker")"
+
+  local entry target moved program
+  for entry in "$HOME"/Desktop/*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+
+    if [[ -L "$entry" ]]; then
+      target="$(readlink "$entry")"
+      if [[ "$target" == /home/kasm-user/* ]]; then
+        moved="$HOME/${target#/home/kasm-user/}"
+        mkdir -p "$moved"
+        ln -sfn "$moved" "$entry"
+        echo "Repaired inherited desktop link $(basename "$entry") -> $moved." >&2
+      fi
+      continue
+    fi
+
+    if [[ "$entry" == *.desktop ]]; then
+      program="$(sed -n 's/^Exec=//p' "$entry" | head -1 | awk '{print $1}')"
+      if [[ -n "$program" ]] \
+        && ! command -v "$program" >/dev/null 2>&1 \
+        && [[ ! -x "$program" ]]; then
+        rm -f "$entry"
+        echo "Removed inherited launcher $(basename "$entry"); $program is not installed." >&2
+      fi
+    fi
+  done
+
+  : > "$marker"
+}
+repair_inherited_desktop
+
 wait_for_display() {
   local wait_seconds="${KHLOEI_DESKTOP_STARTUP_TIMEOUT_SECONDS:-120}"
   local started_at="$SECONDS"

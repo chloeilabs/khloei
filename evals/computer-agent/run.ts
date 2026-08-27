@@ -56,7 +56,7 @@ function providerConfiguration() {
   }
   const model =
     process.env.COMPUTER_EVAL_MODEL?.trim() ||
-    (provider === 'openrouter' ? 'stealth/ox-alpha' : 'gpt-5.6-terra')
+    (provider === 'openrouter' ? 'z-ai/glm-5.3-flash' : 'gpt-5.6-terra')
   return { apiKey, model, provider }
 }
 

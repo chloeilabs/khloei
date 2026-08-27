@@ -3,7 +3,7 @@
 Khloei is a [Next.js](https://nextjs.org) application.
 
 Normal chat, follow-up suggestions, and Computer Use can run through OpenRouter
-with `stealth/ox-alpha` or `x-ai/grok-4.6`. Khloei uses OpenRouter's Responses
+with `z-ai/glm-5.3-flash` or `x-ai/grok-4.6`. Khloei uses OpenRouter's Responses
 API compatibility, streamed output, model-controlled web search, multimodal
 image inputs, Markdown rendering, and a bounded stateless conversation history.
 Select `gpt-5.6-terra` to run normal chat through OpenAI instead.
@@ -51,7 +51,7 @@ AGENT_WORKER_RETENTION_DAYS=30
 ```
 
 The model selector determines the provider for normal chat, follow-up
-suggestions, and Computer Use. `OPENROUTER_API_KEY` is required for Ox Alpha or
+suggestions, and Computer Use. `OPENROUTER_API_KEY` is required for GLM 5.3 Flash or
 Grok 4.6, while `OPENAI_API_KEY` is required for GPT-5.6 Terra and Deep
 Research. `OPENROUTER_SITE_URL=https://your-domain.example` is optional and is
 sent as OpenRouter's `HTTP-Referer` attribution header.
