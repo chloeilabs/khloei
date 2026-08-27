@@ -71,9 +71,13 @@ Responses API feature with no OpenRouter equivalent, so a Deep Research run no
 longer survives a page reload. Computer Use tasks are unaffected, because their
 durability comes from Khloei's own worker rather than the model provider.
 
-Attachments are sent as file input whatever their type. Whether a PDF or office
-document is understood depends on the selected OpenRouter model rather than on
-Khloei.
+Attachments are handled by what each kind actually needs. Images are sent as
+images. A PDF is sent as file input, which OpenRouter parses. Anything textual,
+including source files and Markdown, is inlined as text rather than attached:
+characters work on every model without provider support, and large files are
+truncated so one attachment cannot crowd out the conversation. Word and
+PowerPoint files are compressed archives that the model refuses, so Khloei
+declines them by name instead of failing mid-request.
 
 `COMPUTER_TOKEN` authenticates the app to the computer service. Generate one,
 for example, with `openssl rand -hex 32`. Never prefix it with `NEXT_PUBLIC_`.

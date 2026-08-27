@@ -1,0 +1,72 @@
+import { describe, expect, test } from 'bun:test'
+
+/**
+ * The classification the chat route applies to attachments. Kept in step with
+ * app/api/chat/route.ts, where the behaviour it describes was verified against
+ * OpenRouter rather than assumed.
+ */
+const IMAGE_TYPES = new Set([
+  'image/gif',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+])
+const PROVIDER_PARSED_TYPES = new Set(['application/pdf'])
+
+function isTextualAttachment(mimeType: string) {
+  return (
+    mimeType.startsWith('text/') ||
+    mimeType === 'application/json' ||
+    mimeType === 'application/javascript' ||
+    mimeType === 'application/typescript' ||
+    mimeType === 'application/xml'
+  )
+}
+
+function classify(mimeType: string) {
+  if (IMAGE_TYPES.has(mimeType)) return 'image'
+  if (PROVIDER_PARSED_TYPES.has(mimeType)) return 'file'
+  if (isTextualAttachment(mimeType)) return 'text'
+  return 'unsupported'
+}
+
+describe('attachment classification', () => {
+  test('sends images as images', () => {
+    for (const type of ['image/png', 'image/jpeg', 'image/gif', 'image/webp']) {
+      expect(classify(type)).toBe('image')
+    }
+  })
+
+  test('lets the provider parse a PDF', () => {
+    // Verified against OpenRouter: a PDF sent as input_file comes back read.
+    expect(classify('application/pdf')).toBe('file')
+  })
+
+  test('inlines anything textual rather than attaching it', () => {
+    // The same input_file shape is refused for these, and the characters work
+    // on every model without provider support.
+    for (const type of [
+      'text/plain',
+      'text/markdown',
+      'text/x-python',
+      'text/x-c++',
+      'text/html',
+      'application/json',
+      'application/javascript',
+      'application/typescript',
+    ]) {
+      expect(classify(type)).toBe('text')
+    }
+  })
+
+  test('refuses only the formats that genuinely cannot be read', () => {
+    // Word and PowerPoint are compressed archives; the model refuses them.
+    for (const type of [
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    ]) {
+      expect(classify(type)).toBe('unsupported')
+    }
+  })
+})

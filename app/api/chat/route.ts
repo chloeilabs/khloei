@@ -51,6 +51,41 @@ const IMAGE_TYPES = new Set([
   'image/png',
   'image/webp',
 ])
+
+/**
+ * Types the provider parses for us, verified against OpenRouter rather than
+ * assumed: a PDF sent as `input_file` comes back read, while the same shape
+ * with any other type is refused by the model with "Input should be a valid
+ * string".
+ */
+const PROVIDER_PARSED_TYPES = new Set(['application/pdf'])
+
+/**
+ * Everything textual is inlined instead of attached.
+ *
+ * A source file or a Markdown note is just characters, so handing the model the
+ * characters works on every model and needs no provider support at all. It also
+ * reads better than a base64 blob the provider has to decode first.
+ */
+function isTextualAttachment(mimeType: string) {
+  return (
+    mimeType.startsWith('text/') ||
+    mimeType === 'application/json' ||
+    mimeType === 'application/javascript' ||
+    mimeType === 'application/typescript' ||
+    mimeType === 'application/xml'
+  )
+}
+
+/** Inlined text is capped so one large file cannot crowd out the conversation. */
+const MAX_INLINE_TEXT_CHARS = 256_000
+
+/** Reject bytes that are not really text, rather than sending mojibake. */
+function decodeTextAttachment(bytes: Buffer): string | null {
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+  if (text.includes('\u0000') || text.includes('\uFFFD')) return null
+  return text
+}
 const EXTENSION_MIME_TYPES: Record<string, string> = {
   c: 'text/x-c',
   cpp: 'text/x-c++',
@@ -201,13 +236,22 @@ export async function POST(request: Request) {
     )
   }
 
-  if (
-    attachments.some(
-      (attachment) => !IMAGE_TYPES.has(attachmentMimeType(attachment)),
+  const unsupported = attachments.filter((attachment) => {
+    const mimeType = attachmentMimeType(attachment)
+    return (
+      !IMAGE_TYPES.has(mimeType) &&
+      !PROVIDER_PARSED_TYPES.has(mimeType) &&
+      !isTextualAttachment(mimeType)
     )
-  ) {
+  })
+  if (unsupported.length > 0) {
+    // Word and PowerPoint files are compressed archives, and the model refuses
+    // them outright. Naming them is more useful than a blanket refusal that
+    // also turns away the PDFs and source files that do work.
     return jsonError(
-      'Khloei currently accepts text and image attachments. Document attachments are not supported.',
+      `Khloei cannot read ${unsupported
+        .map((attachment) => filename(attachment.name))
+        .join(', ')}. Images, PDFs, and text or source files are supported; Word and PowerPoint files are not.`,
       400,
     )
   }
@@ -220,21 +264,41 @@ export async function POST(request: Request) {
   ]
 
   for (const attachment of attachments) {
-    const data = Buffer.from(await attachment.arrayBuffer()).toString('base64')
+    const bytes = Buffer.from(await attachment.arrayBuffer())
     const mimeType = attachmentMimeType(attachment)
+    const name = filename(attachment.name)
+
     if (IMAGE_TYPES.has(mimeType)) {
       content.push({
         detail: 'high',
-        image_url: `data:${mimeType};base64,${data}`,
+        image_url: `data:${mimeType};base64,${bytes.toString('base64')}`,
         type: 'input_image',
       })
-    } else {
-      content.push({
-        file_data: `data:${mimeType};base64,${data}`,
-        filename: filename(attachment.name),
-        type: 'input_file',
-      })
+      continue
     }
+
+    if (isTextualAttachment(mimeType)) {
+      const text = decodeTextAttachment(bytes)
+      if (text === null) {
+        return jsonError(`${name} is not readable as text.`, 400)
+      }
+      const truncated = text.length > MAX_INLINE_TEXT_CHARS
+      content.push({
+        text: [
+          `Attached file ${name}${truncated ? ' (truncated)' : ''}:`,
+          '',
+          truncated ? text.slice(0, MAX_INLINE_TEXT_CHARS) : text,
+        ].join('\n'),
+        type: 'input_text',
+      })
+      continue
+    }
+
+    content.push({
+      file_data: `data:${mimeType};base64,${bytes.toString('base64')}`,
+      filename: name,
+      type: 'input_file',
+    })
   }
 
   if (computerUse) {
