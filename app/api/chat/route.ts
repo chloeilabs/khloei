@@ -34,6 +34,10 @@ import {
   openRouterErrorDetails,
 } from '../../lib/model-chat-stream'
 import { requireSameOriginRequest } from '../../lib/request-origin'
+import {
+  extractOfficeText,
+  isOfficeDocument,
+} from '../../lib/office-documents'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -241,7 +245,8 @@ export async function POST(request: Request) {
     return (
       !IMAGE_TYPES.has(mimeType) &&
       !PROVIDER_PARSED_TYPES.has(mimeType) &&
-      !isTextualAttachment(mimeType)
+      !isTextualAttachment(mimeType) &&
+      !isOfficeDocument(mimeType)
     )
   })
   if (unsupported.length > 0) {
@@ -251,7 +256,7 @@ export async function POST(request: Request) {
     return jsonError(
       `Khloei cannot read ${unsupported
         .map((attachment) => filename(attachment.name))
-        .join(', ')}. Images, PDFs, and text or source files are supported; Word and PowerPoint files are not.`,
+        .join(', ')}. Images, PDFs, .docx and .pptx files, and text or source files are supported. The legacy .doc format is not.`,
       400,
     )
   }
@@ -273,6 +278,23 @@ export async function POST(request: Request) {
         detail: 'high',
         image_url: `data:${mimeType};base64,${bytes.toString('base64')}`,
         type: 'input_image',
+      })
+      continue
+    }
+
+    if (isOfficeDocument(mimeType)) {
+      // Word and PowerPoint are ZIP archives of XML. The model refuses the
+      // container, so Khloei opens it and passes on the characters.
+      const text = extractOfficeText(bytes, mimeType)
+      if (text === null) {
+        return jsonError(
+          `${name} could not be read. It may be corrupt, password-protected, or an older binary Office format.`,
+          400,
+        )
+      }
+      content.push({
+        text: [`Attached document ${name}:`, '', text].join('\n'),
+        type: 'input_text',
       })
       continue
     }

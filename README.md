@@ -75,9 +75,11 @@ Attachments are handled by what each kind actually needs. Images are sent as
 images. A PDF is sent as file input, which OpenRouter parses. Anything textual,
 including source files and Markdown, is inlined as text rather than attached:
 characters work on every model without provider support, and large files are
-truncated so one attachment cannot crowd out the conversation. Word and
-PowerPoint files are compressed archives that the model refuses, so Khloei
-declines them by name instead of failing mid-request.
+truncated so one attachment cannot crowd out the conversation. Word and PowerPoint files are ZIP
+archives of XML: the model refuses the container, so Khloei opens it with
+`node:zlib`, pulls out the text, and inlines that. Slides keep their numbers, so
+a question about the third slide can still be answered. The legacy binary `.doc`
+format is a different container and is declined by name.
 
 `COMPUTER_TOKEN` authenticates the app to the computer service. Generate one,
 for example, with `openssl rand -hex 32`. Never prefix it with `NEXT_PUBLIC_`.

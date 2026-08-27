@@ -12,6 +12,10 @@ const IMAGE_TYPES = new Set([
   'image/webp',
 ])
 const PROVIDER_PARSED_TYPES = new Set(['application/pdf'])
+const OFFICE_TYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+])
 
 function isTextualAttachment(mimeType: string) {
   return (
@@ -26,6 +30,7 @@ function isTextualAttachment(mimeType: string) {
 function classify(mimeType: string) {
   if (IMAGE_TYPES.has(mimeType)) return 'image'
   if (PROVIDER_PARSED_TYPES.has(mimeType)) return 'file'
+  if (OFFICE_TYPES.has(mimeType)) return 'office'
   if (isTextualAttachment(mimeType)) return 'text'
   return 'unsupported'
 }
@@ -59,14 +64,22 @@ describe('attachment classification', () => {
     }
   })
 
-  test('refuses only the formats that genuinely cannot be read', () => {
-    // Word and PowerPoint are compressed archives; the model refuses them.
-    for (const type of [
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    ]) {
-      expect(classify(type)).toBe('unsupported')
-    }
+  test('opens Word and PowerPoint itself rather than refusing them', () => {
+    // These are ZIP archives of XML; Khloei extracts the text and inlines it.
+    expect(
+      classify(
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      ),
+    ).toBe('office')
+    expect(
+      classify(
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      ),
+    ).toBe('office')
+  })
+
+  test('still refuses the legacy binary Word format', () => {
+    // .doc predates the ZIP-based formats and is a different container.
+    expect(classify('application/msword')).toBe('unsupported')
   })
 })
