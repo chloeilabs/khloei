@@ -78,8 +78,11 @@ characters work on every model without provider support, and large files are
 truncated so one attachment cannot crowd out the conversation. Word and PowerPoint files are ZIP
 archives of XML: the model refuses the container, so Khloei opens it with
 `node:zlib`, pulls out the text, and inlines that. Slides keep their numbers, so
-a question about the third slide can still be answered. The legacy binary `.doc`
-format is a different container and is declined by name.
+a question about the third slide can still be answered. The legacy binary `.doc` format is a
+different container again -- a compound file whose text lives in pieces, each
+declaring its own encoding -- so it has its own reader. Files that are
+encrypted, or older than Word 97, are refused rather than half-read, because
+returning the wrong text is worse than saying the file could not be read.
 
 `COMPUTER_TOKEN` authenticates the app to the computer service. Generate one,
 for example, with `openssl rand -hex 32`. Never prefix it with `NEXT_PUBLIC_`.

@@ -12,6 +12,7 @@ const IMAGE_TYPES = new Set([
   'image/webp',
 ])
 const PROVIDER_PARSED_TYPES = new Set(['application/pdf'])
+const LEGACY_WORD_TYPES = new Set(['application/msword'])
 const OFFICE_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -31,6 +32,7 @@ function classify(mimeType: string) {
   if (IMAGE_TYPES.has(mimeType)) return 'image'
   if (PROVIDER_PARSED_TYPES.has(mimeType)) return 'file'
   if (OFFICE_TYPES.has(mimeType)) return 'office'
+  if (LEGACY_WORD_TYPES.has(mimeType)) return 'legacy-word'
   if (isTextualAttachment(mimeType)) return 'text'
   return 'unsupported'
 }
@@ -78,8 +80,13 @@ describe('attachment classification', () => {
     ).toBe('office')
   })
 
-  test('still refuses the legacy binary Word format', () => {
-    // .doc predates the ZIP-based formats and is a different container.
-    expect(classify('application/msword')).toBe('unsupported')
+  test('reads the legacy binary Word format through its own parser', () => {
+    // .doc is a compound file, not a ZIP, so it needs a different reader.
+    expect(classify('application/msword')).toBe('legacy-word')
+  })
+
+  test('still refuses what it genuinely cannot read', () => {
+    expect(classify('application/zip')).toBe('unsupported')
+    expect(classify('application/octet-stream')).toBe('unsupported')
   })
 })

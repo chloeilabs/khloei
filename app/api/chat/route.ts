@@ -38,6 +38,10 @@ import {
   extractOfficeText,
   isOfficeDocument,
 } from '../../lib/office-documents'
+import {
+  extractLegacyWordText,
+  isLegacyWordDocument,
+} from '../../lib/legacy-word'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -246,7 +250,8 @@ export async function POST(request: Request) {
       !IMAGE_TYPES.has(mimeType) &&
       !PROVIDER_PARSED_TYPES.has(mimeType) &&
       !isTextualAttachment(mimeType) &&
-      !isOfficeDocument(mimeType)
+      !isOfficeDocument(mimeType) &&
+      !isLegacyWordDocument(mimeType)
     )
   })
   if (unsupported.length > 0) {
@@ -256,7 +261,7 @@ export async function POST(request: Request) {
     return jsonError(
       `Khloei cannot read ${unsupported
         .map((attachment) => filename(attachment.name))
-        .join(', ')}. Images, PDFs, .docx and .pptx files, and text or source files are supported. The legacy .doc format is not.`,
+        .join(', ')}. Images, PDFs, Word and PowerPoint files, and text or source files are supported.`,
       400,
     )
   }
@@ -278,6 +283,24 @@ export async function POST(request: Request) {
         detail: 'high',
         image_url: `data:${mimeType};base64,${bytes.toString('base64')}`,
         type: 'input_image',
+      })
+      continue
+    }
+
+    if (isLegacyWordDocument(mimeType)) {
+      // Legacy Word is a compound file whose text lives in pieces, each with
+      // its own encoding. Scraping printable bytes would look plausible and be
+      // wrong, so a file this cannot read properly is refused instead.
+      const text = extractLegacyWordText(bytes)
+      if (text === null) {
+        return jsonError(
+          `${name} could not be read. It may be corrupt, password-protected, or older than Word 97.`,
+          400,
+        )
+      }
+      content.push({
+        text: [`Attached document ${name}:`, '', text].join('\n'),
+        type: 'input_text',
       })
       continue
     }
