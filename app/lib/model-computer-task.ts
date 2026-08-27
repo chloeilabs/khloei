@@ -17,14 +17,24 @@ import { createComputerTaskResumeToken } from './computer/worker-auth'
 type ComputerTaskOptions = {
   content: ResponseInputMessageContentList
   history: readonly ChatHistoryMessage[]
+  /** Absent means a computer task, which is what every worker task once was. */
+  kind?: 'computer' | 'deep-research'
   model: ChatModelId
   provider: ModelProvider
   signal: AbortSignal
 }
 
+/**
+ * Hand a long-running request to the durable worker.
+ *
+ * The response is a two-event stream that tells the browser where the work
+ * lives; everything after that arrives through the resume endpoint, which is
+ * what lets a reload or a serverless timeout rejoin instead of losing the run.
+ */
 export async function createComputerTaskResponse({
   content,
   history,
+  kind,
   model,
   provider,
   signal,
@@ -32,6 +42,7 @@ export async function createComputerTaskResponse({
   const taskId = await createComputerTask(
     {
       input: computerAgentInput(history, content),
+      ...(kind === 'deep-research' ? { kind } : {}),
       model,
       provider,
     },

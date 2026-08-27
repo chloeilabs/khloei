@@ -69,12 +69,16 @@ function taskRequest(value: unknown): ComputerTaskRequest | null {
     value.model.length > 200 ||
     !Array.isArray(value.input) ||
     value.input.length === 0 ||
-    value.input.length > 100
+    value.input.length > 100 ||
+    (value.kind !== undefined &&
+      value.kind !== 'computer' &&
+      value.kind !== 'deep-research')
   ) {
     return null
   }
   return {
     input: value.input as ComputerTaskRequest['input'],
+    ...(value.kind === 'deep-research' ? { kind: 'deep-research' as const } : {}),
     model: value.model,
     provider: value.provider,
   }

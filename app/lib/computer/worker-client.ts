@@ -34,8 +34,8 @@ export type ComputerTaskSnapshot = {
 
 type CreateComputerTaskInput = {
   input: AgentInputItem[]
+  kind?: 'computer' | 'deep-research'
   model: ChatModelId
-  previousResponseId?: string
   provider: ModelProvider
 }
 

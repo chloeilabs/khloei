@@ -13,10 +13,14 @@ on purpose: the suffix searches on every request rather than when the model
 decides it needs to, and a computer task runs many turns, so enabling it
 multiplies a per-search charge across the whole task.
 
-Deep Research runs with `z-ai/glm-5.3-flash` as an ordinary stream. Computer Use
-remains durable across a disconnect, a serverless timeout, or a browser reload,
-because that durability comes from Khloei's own worker and its exactly-once
-action ledger rather than from the model provider.
+Deep Research runs with `z-ai/glm-5.3-flash` on the same durable worker as
+Computer Use, so a long run survives a disconnect, a serverless timeout, or a
+browser reload. That durability comes from Khloei's own task record, event log
+and run-state checkpoint rather than from the model provider. A research task
+is given no tools, so it needs the event log and the checkpoint but not the
+exactly-once action ledger a computer task depends on. Research always searches
+the web, independently of `KHLOEI_COMPUTER_WEB_SEARCH`. Where the worker is not
+configured, Deep Research still runs inline, just without resumability.
 
 Computer Use gives Khloei a persistent Playwright browser, a confined file
 workspace, and an optional full Linux desktop. Browser, file, command, and

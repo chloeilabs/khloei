@@ -6,7 +6,6 @@ import {
   RunContext,
   Runner,
   RunState,
-  webSearchTool,
   type AgentInputItem,
   type RunToolApprovalItem,
 } from '@openai/agents'
@@ -16,6 +15,11 @@ import type {
   ResponseOutputText,
 } from 'openai/resources/responses/responses'
 
+import {
+  DEEP_RESEARCH_INSTRUCTIONS,
+  DEEP_RESEARCH_MAX_OUTPUT_TOKENS,
+  deepResearchModel,
+} from '../../../shared/deep-research'
 import {
   COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE,
   COMPUTER_AGENT_INSTRUCTIONS,
@@ -34,7 +38,6 @@ import {
 import { TaskEventNotifier } from './notifier'
 import { isCommittedActionResult, TaskStore } from './store'
 import type {
-  ModelProvider,
   PendingApproval,
   TaskRecord,
   WorkerActionResponse,
@@ -174,7 +177,7 @@ function outputItemActivity(value: unknown, completed: boolean) {
   return null
 }
 
-function providerError(error: unknown, _provider: ModelProvider) {
+function providerError(error: unknown) {
   const status =
     isRecord(error) && typeof error.status === 'number' ? error.status : 500
   const code = isRecord(error) && typeof error.code === 'string' ? error.code : ''
@@ -195,7 +198,7 @@ function providerError(error: unknown, _provider: ModelProvider) {
  * The OpenAI client library is the transport for OpenRouter, whose API is
  * OpenAI-compatible. It is not a provider choice.
  */
-function createModelClient(_task: TaskRecord) {
+function createModelClient() {
   const key = process.env.OPENROUTER_API_KEY?.trim()
   if (!key) {
     throw new Error('OPENROUTER_API_KEY is not configured on the worker.')
@@ -332,17 +335,30 @@ export class ComputerTaskRuntime {
     }
 
     try {
-      const client = createModelClient(task)
-      const tools = createComputerAgentTools({ durableHumanApprovals: true })
+      const client = createModelClient()
+      // A research task takes no actions in the world, so it is given no tools;
+      // its durability is the event log and the checkpoint rather than the
+      // exactly-once ledger a computer task needs.
+      const research = task.request.kind === 'deep-research'
+      const tools = research
+        ? []
+        : createComputerAgentTools({ durableHumanApprovals: true })
       const agent = new Agent<ComputerAgentContext>({
-        name: 'Khloei Computer',
-        instructions: COMPUTER_AGENT_INSTRUCTIONS,
-        model: computerAgentModel(task.request.model),
+        name: research ? 'Khloei Deep Research' : 'Khloei Computer',
+        instructions: research
+          ? DEEP_RESEARCH_INSTRUCTIONS
+          : COMPUTER_AGENT_INSTRUCTIONS,
+        // Research without current sources is not research, so its search is
+        // not behind the flag that governs the computer's optional search.
+        model: research
+          ? deepResearchModel(task.request.model)
+          : computerAgentModel(task.request.model),
         modelSettings: {
-          maxTokens: 8_192,
+          maxTokens: research ? DEEP_RESEARCH_MAX_OUTPUT_TOKENS : 8_192,
           parallelToolCalls: false,
-          reasoning: { effort: 'medium' },
+          reasoning: { effort: research ? 'high' : 'medium' },
           toolChoice: 'auto',
+          ...(research ? { text: { verbosity: 'high' as const } } : {}),
         },
         tools,
       })
@@ -403,7 +419,6 @@ export class ComputerTaskRuntime {
       let turnLimit = computerAgentTurnLimit(
         input instanceof RunState ? input.toJSON() : { currentTurn: 0 },
       )
-      let firstSegment = true
       if (turnLimit === null) {
         throw new Error(COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE)
       }
@@ -511,8 +526,7 @@ export class ComputerTaskRuntime {
               // model resumes the same transcript and completed tool calls remain exactly-once.
               input = run.state
               turnLimit = nextTurnLimit
-              firstSegment = false
-              continue
+                  continue
             }
           }
           throw error
@@ -609,7 +623,7 @@ export class ComputerTaskRuntime {
       const message =
         error instanceof MaxTurnsExceededError
           ? COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE
-          : providerError(error, task.request.provider)
+          : providerError(error)
       this.append(task.id, { message, type: 'error' })
       this.store.markTerminal(task.id, 'failed', message)
     } finally {

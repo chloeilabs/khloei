@@ -13,6 +13,7 @@ import {
   isChatModelId,
 } from '../../lib/chat-models'
 import { DEEP_RESEARCH_MODEL } from '../../lib/chat-config'
+import { DEEP_RESEARCH_MAX_OUTPUT_TOKENS } from '@/shared/deep-research'
 import {
   isComputerWorkerConfigured,
   isComputerWorkerRequired,
@@ -38,7 +39,6 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 300
 export const runtime = 'nodejs'
 
-const DEEP_RESEARCH_MAX_OUTPUT_TOKENS = 64_000
 const MAX_ATTACHMENTS = 8
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 const MAX_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024
@@ -267,6 +267,30 @@ export async function POST(request: Request) {
     }
   }
 
+  // A research run is long enough that losing it to a reload or a serverless
+  // timeout wastes both the wait and the spend. The durable worker is what
+  // makes it resumable now that OpenAI's background responses are gone; where
+  // the worker is unavailable it still runs inline, just without that safety.
+  if (deepResearch && isComputerWorkerConfigured()) {
+    try {
+      return await createComputerTaskResponse({
+        content,
+        history,
+        kind: 'deep-research',
+        model: DEEP_RESEARCH_MODEL,
+        provider,
+        signal: request.signal,
+      })
+    } catch (error) {
+      return jsonError(
+        error instanceof Error
+          ? error.message
+          : 'Khloei could not start the durable research task.',
+        503,
+      )
+    }
+  }
+
   let client
   try {
     client = createModelClient()
@@ -313,7 +337,6 @@ export async function POST(request: Request) {
     } else {
       modelStream = await client.responses.create(
         {
-          background: deepResearch,
           input,
           instructions: [
             CHAT_INSTRUCTIONS,
@@ -334,7 +357,6 @@ export async function POST(request: Request) {
             effort: deepResearch ? 'max' : 'medium',
             summary: 'auto',
           },
-          store: true,
           stream: true,
           text: { verbosity: deepResearch ? 'high' : 'medium' },
           tool_choice: 'auto',
