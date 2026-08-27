@@ -19,6 +19,7 @@ import type {
 import {
   COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE,
   COMPUTER_AGENT_INSTRUCTIONS,
+  computerAgentModel,
   computerAgentTurnLimit,
   createComputerAgentTools,
   type ComputerAgentContext,
@@ -336,7 +337,7 @@ export class ComputerTaskRuntime {
       const agent = new Agent<ComputerAgentContext>({
         name: 'Khloei Computer',
         instructions: COMPUTER_AGENT_INSTRUCTIONS,
-        model: task.request.model,
+        model: computerAgentModel(task.request.model),
         modelSettings: {
           maxTokens: 8_192,
           parallelToolCalls: false,

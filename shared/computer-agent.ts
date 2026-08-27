@@ -52,6 +52,28 @@ export function computerAgentTurnLimit({
   )
 }
 
+/**
+ * Give a model OpenRouter's web search, or leave it as it is.
+ *
+ * OpenRouter enables search through an `:online` suffix on the model id, which
+ * is the only route the Agents SDK leaves open: it builds the request itself,
+ * so a provider-native tool cannot be attached the way the chat path attaches
+ * `openrouter:web_search`.
+ *
+ * It is off unless asked for. The suffix searches on *every* request rather
+ * than when the model decides it needs to, and a computer task runs many turns,
+ * so enabling it multiplies a per-search charge across the whole task. The
+ * OpenAI hosted tool it replaces was model-elected and only billed when used,
+ * so switching it on by default would have quietly changed what a task costs.
+ */
+export function computerAgentModel(
+  model: string,
+  environment: Record<string, string | undefined> = process.env,
+): string {
+  if (environment.KHLOEI_COMPUTER_WEB_SEARCH?.trim() !== 'true') return model
+  return model.endsWith(':online') ? model : `${model}:online`
+}
+
 export const COMPUTER_AGENT_INSTRUCTIONS = [
   'You are Khloei, a thoughtful and precise AI assistant.',
   'The user selected Computer Use. You have a persistent Linux desktop, browser, confined file workspace, and a governed non-root command runner of your own.',

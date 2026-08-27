@@ -20,6 +20,7 @@ import type { ChatActivity, ChatStreamEvent } from './chat'
 import {
   COMPUTER_AGENT_BUDGET_EXHAUSTED_MESSAGE,
   COMPUTER_AGENT_INSTRUCTIONS,
+  computerAgentModel,
   computerAgentInput,
   computerAgentTurnLimit,
   createComputerAgentTools,
@@ -212,7 +213,7 @@ export function createComputerStreamResponse({
         const agent = new Agent<ComputerAgentContext>({
           name: 'Khloei Computer',
           instructions: COMPUTER_AGENT_INSTRUCTIONS,
-          model,
+          model: computerAgentModel(model),
           modelSettings: {
             maxTokens: 8_192,
             parallelToolCalls: false,

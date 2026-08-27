@@ -14,6 +14,7 @@ import {
 import { z } from 'zod'
 
 import {
+  computerAgentModel,
   COMPUTER_AGENT_TURNS_PER_SEGMENT,
   MAX_COMPUTER_AGENT_TURNS,
   computerAgentTurnLimit,
@@ -106,6 +107,35 @@ describe('computer visual tool output', () => {
         result: { title: 'Khloei' },
       }),
     ).toBe('{"ok":true,"result":{"title":"Khloei"}}')
+  })
+})
+
+describe('computer agent web search', () => {
+  test('leaves the model alone unless search is asked for', () => {
+    // The suffix searches on every request, and a computer task runs many
+    // turns, so switching it on by default would quietly change task cost.
+    expect(computerAgentModel('z-ai/glm-5.3-flash', {})).toBe('z-ai/glm-5.3-flash')
+    expect(
+      computerAgentModel('z-ai/glm-5.3-flash', {
+        KHLOEI_COMPUTER_WEB_SEARCH: 'false',
+      }),
+    ).toBe('z-ai/glm-5.3-flash')
+  })
+
+  test('adds OpenRouter search when asked for', () => {
+    expect(
+      computerAgentModel('z-ai/glm-5.3-flash', {
+        KHLOEI_COMPUTER_WEB_SEARCH: 'true',
+      }),
+    ).toBe('z-ai/glm-5.3-flash:online')
+  })
+
+  test('never doubles the suffix', () => {
+    expect(
+      computerAgentModel('z-ai/glm-5.3-flash:online', {
+        KHLOEI_COMPUTER_WEB_SEARCH: 'true',
+      }),
+    ).toBe('z-ai/glm-5.3-flash:online')
   })
 })
 

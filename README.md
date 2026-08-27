@@ -7,6 +7,12 @@ Normal chat, follow-up suggestions, and Computer Use run through OpenRouter with
 compatibility, streamed output, model-controlled web search, multimodal image
 inputs, Markdown rendering, and a bounded stateless conversation history.
 
+Computer Use can search the web by setting `KHLOEI_COMPUTER_WEB_SEARCH=true`,
+which appends OpenRouter's `:online` suffix to the model. It is off by default
+on purpose: the suffix searches on every request rather than when the model
+decides it needs to, and a computer task runs many turns, so enabling it
+multiplies a per-search charge across the whole task.
+
 Deep Research runs with `z-ai/glm-5.3-flash` as an ordinary stream. Computer Use
 remains durable across a disconnect, a serverless timeout, or a browser reload,
 because that durability comes from Khloei's own worker and its exactly-once
