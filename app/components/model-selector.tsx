@@ -134,7 +134,6 @@ export function ModelSelector({
           role="menu"
         >
           <PromptGlass />
-          <div className="prompt-input-model-label">Model</div>
           {CHAT_MODELS.map((model) => {
             const Icon = MODEL_ICONS[model.id]
             const checked = model.id === value
@@ -154,12 +153,7 @@ export function ModelSelector({
                 <span className="prompt-input-menu-icon">
                   <Icon aria-hidden size={14} strokeWidth={1.75} />
                 </span>
-                <span className="prompt-input-model-copy">
-                  <span className="prompt-input-model-title">{model.name}</span>
-                  <span className="prompt-input-model-provider">
-                    {model.providerName}
-                  </span>
-                </span>
+                <span className="prompt-input-model-title">{model.name}</span>
                 {checked ? (
                   <span className="prompt-input-model-check">
                     <Check aria-hidden size={13} strokeWidth={2} />

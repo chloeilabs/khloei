@@ -770,55 +770,24 @@
   width: 13.5rem;
 }
 
-.prompt-input-model-label {
-  position: relative;
-  z-index: 1;
-  padding: 0.2rem 0.5rem 0.3rem;
-  color: color-mix(
-    in oklab,
-    var(--foreground) 50%,
-    var(--muted-foreground)
-  );
-  font-size: 0.6875rem;
-  line-height: 1.2;
-}
-
 .prompt-input-model-option {
-  height: 2.6rem;
+  height: 2rem;
 }
 
 .prompt-input-model-option[aria-checked='true'] {
   background: color-mix(in oklab, var(--foreground) 6%, transparent);
 }
 
-.prompt-input-model-copy {
-  display: flex;
+.prompt-input-model-title {
   min-width: 0;
   flex: 1 1 auto;
-  flex-direction: column;
-  gap: 0.2rem;
-}
-
-.prompt-input-model-title,
-.prompt-input-model-provider {
   overflow: hidden;
+  color: var(--foreground);
+  font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.prompt-input-model-title {
-  color: var(--foreground);
-  font-weight: 500;
-}
-
-.prompt-input-model-provider {
-  color: color-mix(
-    in oklab,
-    var(--foreground) 50%,
-    var(--muted-foreground)
-  );
-  font-size: 0.65rem;
-}
 
 .prompt-input-spinner-btn {
   cursor: default;

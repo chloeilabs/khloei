@@ -11,19 +11,16 @@ export const CHAT_MODELS = [
     id: OPENROUTER_CHAT_MODEL,
     name: 'GLM 5.3 Flash',
     provider: 'openrouter',
-    providerName: 'OpenRouter',
   },
   {
     id: OPENROUTER_GROK_MODEL,
     name: 'Grok 4.6',
     provider: 'openrouter',
-    providerName: 'OpenRouter',
   },
 ] as const satisfies ReadonlyArray<{
   id: string
   name: string
   provider: ChatModelProvider
-  providerName: string
 }>
 
 export type ChatModelId = (typeof CHAT_MODELS)[number]['id']
